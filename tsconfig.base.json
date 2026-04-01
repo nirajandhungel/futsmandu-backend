@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    // ─── Module System ────────────────────────────────────────────────────────
+    // Fully converted to ES Modules ("type": "module" in package.json)
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    // ─── Compilation Target ───────────────────────────────────────────────────
+    "target": "ES2022",
+    "lib": [
+      "ES2022"
+    ],
+    // ─── Path Aliases (monorepo workspace links) ───────────────────────────────
+    "baseUrl": ".",
+    "paths": {
+      "@futsmandu/*": [
+        "packages/*/src"
+      ]
+    },
+    // ─── Type Safety ──────────────────────────────────────────────────────────
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    // ─── Interop & Quality ────────────────────────────────────────────────────
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    // ─── Output ───────────────────────────────────────────────────────────────
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    // ─── Decorators (NestJS requires both) ────────────────────────────────────
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  }
+}
