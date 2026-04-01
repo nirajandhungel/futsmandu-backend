@@ -1,0 +1,22 @@
+{
+  "name": "@futsmandu/database",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build --force",
+    "prisma:generate": "dotenv -e ../../.env -- prisma generate",
+    "prisma:migrate:dev": "dotenv -e ../../.env -- prisma migrate dev",
+    "prisma:migrate:deploy": "dotenv -e ../../.env -- prisma migrate deploy",
+    "prisma:push": "dotenv -e ../../.env -- prisma db push",
+    "prisma:studio": "dotenv -e ../../.env -- prisma studio",
+    "migrate": "dotenv -e ../../.env -- prisma migrate deploy"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.11",
+    "@futsmandu/utils": "*",
+    "@prisma/client": "^6.5.0",
+    "prisma": "^6.5.0"
+  }
+}

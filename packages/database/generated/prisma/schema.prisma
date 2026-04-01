@@ -1,0 +1,538 @@
+// CHANGED: [C-2, M-7, SEC-3, PgBouncer-hints]
+// NEW ISSUES FOUND:
+//   - payments_booking @@ignore @@map("bookings") anti-pattern (M-7): removed, relation fixed directly
+//   - Missing refresh_token_version field on users (C-2)
+//   - Missing admin_audit_log model (SEC-3)
+//   - Missing relationMode = "prisma" and directUrl already present — added relationMode to avoid FK
+//     check queries through PgBouncer transaction-mode pooler
+
+// packages/database/prisma/schema.prisma
+// Single shared schema used by both player-api and owner-admin-api.
+// PgBouncer pooled URL for app queries; direct URL for migrations only.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider     = "postgresql"
+  url          = env("DATABASE_URL") // PgBouncer port 6543 — all app queries
+  directUrl    = env("DIRECT_DATABASE_URL") // Direct port 5432 — migrations only
+  relationMode = "prisma" // Avoids FK check queries through PgBouncer
+}
+
+// ── Enums ────────────────────────────────────────────────────────────────────
+
+enum booking_status {
+  HELD
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+  NO_SHOW
+  COMPLETED
+}
+
+enum booking_type {
+  online
+  offline_cash
+  offline_paid
+  offline_reserved
+}
+
+enum payment_status {
+  INITIATED
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum payment_gateway {
+  KHALTI
+  ESEWA
+}
+
+enum friendship_status {
+  pending
+  accepted
+  blocked
+}
+
+enum skill_level {
+  beginner
+  intermediate
+  advanced
+}
+
+enum player_role {
+  goalkeeper
+  defender
+  midfielder
+  striker
+}
+
+enum penalty_type {
+  WARNING
+  BAN_7D
+  BAN_30D
+  SUSPENDED
+}
+
+enum pricing_modifier {
+  fixed
+  percent_add
+  percent_off
+}
+
+enum admin_role {
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum mg_member_status {
+  confirmed
+  invited
+  pending
+  no_show
+}
+
+enum notification_type {
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  SLOT_EXPIRING
+  MATCH_INVITE
+  FRIEND_REQUEST
+  FRIEND_ACCEPTED
+  NO_SHOW_MARKED
+  REVIEW_REQUEST
+  MATCH_FULL
+  GENERAL
+}
+
+// ── Users ────────────────────────────────────────────────────────────────────
+
+model users {
+  id                    String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String
+  email                 String      @unique
+  phone                 String      @unique
+  password_hash         String
+  profile_image_url     String?
+  is_verified           Boolean     @default(false)
+  is_active             Boolean     @default(true)
+  fcm_token             String?
+  skill_level           skill_level @default(beginner)
+  elo_rating            Int         @default(1200)
+  reliability_score     Int         @default(100) @db.SmallInt
+  total_no_shows        Int         @default(0)
+  total_late_cancels    Int         @default(0)
+  ban_until             DateTime?   @db.Timestamptz
+  is_suspended          Boolean     @default(false)
+  matches_played        Int         @default(0)
+  matches_won           Int         @default(0)
+  matches_lost          Int         @default(0)
+  matches_draw          Int         @default(0)
+  show_match_history    Boolean     @default(true)
+  // C-2: Monotonic version counter — incremented on every refresh token rotation.
+  // Stale refresh tokens (embedding older version) are rejected immediately.
+  refresh_token_version Int         @default(0)
+  created_at            DateTime    @default(now()) @db.Timestamptz
+  updated_at            DateTime    @updatedAt @db.Timestamptz
+
+  bookings             bookings[]             @relation("PlayerBookings")
+  cancelled_bookings   bookings[]             @relation("CancelledBy")
+  payments             payments[]
+  match_groups_admin   match_groups[]
+  match_group_members  match_group_members[]
+  sent_friendships     friendships[]          @relation("Requester")
+  received_friendships friendships[]          @relation("Recipient")
+  no_show_logs         no_show_logs[]         @relation("PlayerNoShows")
+  marked_no_shows      no_show_logs[]         @relation("MarkedBy")
+  penalties            penalty_history[]
+  reviews              reviews[]
+  notifications        notifications[]
+  preferred_roles      user_preferred_roles[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([ban_until])
+}
+
+model user_preferred_roles {
+  id      String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id String      @db.Uuid
+  role    player_role
+  user    users       @relation(fields: [user_id], references: [id])
+
+  @@unique([user_id, role])
+  @@index([user_id])
+}
+
+// ── Admins (platform RBAC) ───────────────────────────────────────────────────
+
+model admins {
+  id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String     @unique
+  password_hash String
+  name          String
+  role          admin_role @default(ADMIN)
+  is_active     Boolean    @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  kycApprovals   owners[] @relation("AdminKycApprovals")
+  venueApprovals venues[] @relation("AdminVenueApprovals")
+}
+
+// ── Owners ───────────────────────────────────────────────────────────────────
+
+model owners {
+  id                String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String
+  email             String  @unique
+  phone             String  @unique
+  password_hash     String
+  business_name     String?
+  is_verified       Boolean @default(false)
+  is_active         Boolean @default(true)
+  verification_docs Json?
+
+  // Admin-driven KYC approvals (kept in sync with legacy is_verified during migration/refactor)
+  isKycApproved   Boolean   @default(false)
+  kycApprovedAt   DateTime?
+  kycApprovedById String?   @db.Uuid
+  kycApprovedBy   admins?   @relation("AdminKycApprovals", fields: [kycApprovedById], references: [id])
+
+  fcm_token             String?
+  refresh_token_version Int      @default(0)
+  created_at            DateTime @default(now()) @db.Timestamptz
+  updated_at            DateTime @updatedAt @db.Timestamptz
+
+  venues venues[]
+}
+
+// ── Venues & Courts ──────────────────────────────────────────────────────────
+
+model venues {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id        String   @db.Uuid
+  name            String
+  slug            String   @unique
+  description     String?
+  address         Json
+  latitude        Decimal? @db.Decimal(10, 8)
+  longitude       Decimal? @db.Decimal(11, 8)
+  amenities       String[]
+  cover_image_url String?
+  is_active       Boolean  @default(true)
+  is_verified     Boolean  @default(false)
+
+  // Admin-driven venue approvals (kept in sync with legacy is_verified during migration/refactor)
+  isApproved   Boolean   @default(false)
+  approvedAt   DateTime?
+  approvedById String?   @db.Uuid
+  approvedBy   admins?   @relation("AdminVenueApprovals", fields: [approvedById], references: [id])
+
+  avg_rating           Decimal  @default(0) @db.Decimal(3, 2)
+  total_reviews        Int      @default(0)
+  full_refund_hours    Int      @default(24) @db.SmallInt
+  partial_refund_hours Int      @default(6) @db.SmallInt
+  partial_refund_pct   Int      @default(50) @db.SmallInt
+  created_at           DateTime @default(now()) @db.Timestamptz
+  updated_at           DateTime @updatedAt @db.Timestamptz
+
+  owner        owners         @relation(fields: [owner_id], references: [id])
+  courts       courts[]
+  bookings     bookings[]
+  match_groups match_groups[]
+  reviews      reviews[]
+
+  @@index([is_active, is_verified])
+  @@index([owner_id])
+}
+
+model courts {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  venue_id           String   @db.Uuid
+  name               String
+  court_type         String   @default("5v5")
+  surface            String   @default("turf")
+  capacity           Int      @default(10) @db.SmallInt
+  min_players        Int      @default(4) @db.SmallInt
+  slot_duration_mins Int      @default(60) @db.SmallInt
+  open_time          String   @default("06:00")
+  close_time         String   @default("22:00")
+  is_active          Boolean  @default(true)
+  created_at         DateTime @default(now()) @db.Timestamptz
+
+  venue         venues          @relation(fields: [venue_id], references: [id], onDelete: Cascade)
+  bookings      bookings[]
+  pricing_rules pricing_rules[]
+  match_groups  match_groups[]
+
+  @@index([venue_id, is_active])
+}
+
+model pricing_rules {
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  court_id     String           @db.Uuid
+  rule_type    String
+  priority     Int              @db.SmallInt
+  price        Int
+  modifier     pricing_modifier @default(fixed)
+  days_of_week Int[]
+  start_time   String?
+  end_time     String?
+  date_from    DateTime?        @db.Date
+  date_to      DateTime?        @db.Date
+  hours_before Int?
+  is_active    Boolean          @default(true)
+  created_at   DateTime         @default(now()) @db.Timestamptz
+
+  court    courts     @relation(fields: [court_id], references: [id])
+  bookings bookings[]
+
+  @@unique([court_id, priority])
+  @@index([court_id, is_active])
+}
+
+// ── Bookings — Critical Table ─────────────────────────────────────────────────
+
+model bookings {
+  id                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  booking_type           booking_type   @default(online)
+  player_id              String?        @db.Uuid
+  court_id               String         @db.Uuid
+  venue_id               String         @db.Uuid
+  booking_date           DateTime       @db.Date
+  start_time             String
+  end_time               String
+  duration_mins          Int            @db.SmallInt
+  total_amount           Int
+  base_price             Int
+  applied_rule_id        String?        @db.Uuid
+  status                 booking_status @default(HELD)
+  hold_expires_at        DateTime?      @db.Timestamptz
+  cancelled_at           DateTime?      @db.Timestamptz
+  cancelled_by           String?        @db.Uuid
+  cancel_reason          String?
+  refund_status          String?
+  refund_amount          Int?
+  offline_customer_name  String?
+  offline_customer_phone String?
+  offline_notes          String?
+  created_by             String         @db.Uuid
+  created_at             DateTime       @default(now()) @db.Timestamptz
+  updated_at             DateTime       @updatedAt @db.Timestamptz
+
+  // M-7: Direct relation — no payments_booking ghost model
+  player       users?         @relation("PlayerBookings", fields: [player_id], references: [id], onDelete: SetNull)
+  canceller    users?         @relation("CancelledBy", fields: [cancelled_by], references: [id])
+  court        courts         @relation(fields: [court_id], references: [id], onDelete: Restrict)
+  venue        venues         @relation(fields: [venue_id], references: [id], onDelete: Restrict)
+  applied_rule pricing_rules? @relation(fields: [applied_rule_id], references: [id])
+  payment      payments?
+  match_group  match_groups?
+  review       reviews?
+
+  // ANTI-DOUBLE-BOOKING partial unique index applied via raw SQL migration:
+  // CREATE UNIQUE INDEX idx_bookings_slot_lock ON bookings(court_id, booking_date, start_time)
+  //   WHERE status IN ('HELD','PENDING_PAYMENT','CONFIRMED');
+  @@index([player_id, created_at(sort: Desc)])
+  @@index([court_id, booking_date, status])
+  @@index([venue_id, booking_date, status])
+  @@index([hold_expires_at, status])
+}
+
+// ── Payments ─────────────────────────────────────────────────────────────────
+
+// M-7: payments now relates directly to bookings — no ghost model
+model payments {
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  booking_id          String          @unique @db.Uuid
+  player_id           String          @db.Uuid
+  amount              Int
+  gateway             payment_gateway
+  gateway_tx_id       String?
+  gateway_response    Json?
+  status              payment_status  @default(INITIATED)
+  initiated_at        DateTime        @default(now()) @db.Timestamptz
+  completed_at        DateTime?       @db.Timestamptz
+  refund_initiated_at DateTime?       @db.Timestamptz
+  refund_completed_at DateTime?       @db.Timestamptz
+
+  booking bookings @relation(fields: [booking_id], references: [id])
+  player  users    @relation(fields: [player_id], references: [id])
+
+  @@index([gateway_tx_id])
+  @@index([status])
+  @@index([player_id])
+}
+
+// ── Match Groups ─────────────────────────────────────────────────────────────
+
+model match_groups {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  booking_id        String       @unique @db.Uuid
+  venue_id          String       @db.Uuid
+  court_id          String       @db.Uuid
+  match_date        DateTime     @db.Date
+  start_time        String
+  end_time          String
+  admin_id          String       @db.Uuid
+  is_open           Boolean      @default(false)
+  auto_accept       Boolean      @default(false)
+  max_players       Int          @db.SmallInt
+  min_players       Int          @db.SmallInt
+  skill_filter      skill_level?
+  invite_token      String?      @unique
+  token_expires_at  DateTime?    @db.Timestamptz
+  result_winner     String?
+  attendance_marked Boolean      @default(false)
+  created_at        DateTime     @default(now()) @db.Timestamptz
+
+  booking bookings              @relation(fields: [booking_id], references: [id])
+  venue   venues                @relation(fields: [venue_id], references: [id])
+  court   courts                @relation(fields: [court_id], references: [id])
+  admin   users                 @relation(fields: [admin_id], references: [id])
+  members match_group_members[]
+
+  @@index([is_open, match_date, start_time])
+  @@index([invite_token])
+  @@index([admin_id])
+}
+
+model match_group_members {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  match_group_id String           @db.Uuid
+  user_id        String           @db.Uuid
+  role           String           @default("player")
+  team_side      String?          @db.Char(1)
+  position       player_role?
+  status         mg_member_status @default(confirmed)
+  joined_at      DateTime         @default(now()) @db.Timestamptz
+
+  match_group match_groups @relation(fields: [match_group_id], references: [id], onDelete: Cascade)
+  user        users        @relation(fields: [user_id], references: [id])
+
+  @@unique([match_group_id, user_id])
+  @@index([user_id])
+}
+
+// ── Social ───────────────────────────────────────────────────────────────────
+
+model friendships {
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requester_id String            @db.Uuid
+  recipient_id String            @db.Uuid
+  status       friendship_status @default(pending)
+  created_at   DateTime          @default(now()) @db.Timestamptz
+  updated_at   DateTime          @updatedAt @db.Timestamptz
+
+  requester users @relation("Requester", fields: [requester_id], references: [id])
+  recipient users @relation("Recipient", fields: [recipient_id], references: [id])
+
+  @@unique([requester_id, recipient_id])
+  @@index([recipient_id, status])
+}
+
+// ── Reliability ──────────────────────────────────────────────────────────────
+
+model no_show_logs {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  player_id      String    @db.Uuid
+  booking_id     String    @db.Uuid
+  marked_by      String    @db.Uuid
+  marked_by_type String
+  dispute_status String    @default("none")
+  dispute_reason String?
+  resolved_at    DateTime? @db.Timestamptz
+  created_at     DateTime  @default(now()) @db.Timestamptz
+
+  player users @relation("PlayerNoShows", fields: [player_id], references: [id])
+  marker users @relation("MarkedBy", fields: [marked_by], references: [id])
+
+  @@index([player_id, created_at])
+  @@index([booking_id])
+}
+
+model penalty_history {
+  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  player_id    String       @db.Uuid
+  penalty_type penalty_type
+  reason       String
+  triggered_by String
+  ends_at      DateTime?    @db.Timestamptz
+  status       String       @default("active")
+  admin_note   String?
+  created_at   DateTime     @default(now()) @db.Timestamptz
+
+  player users @relation(fields: [player_id], references: [id])
+
+  @@index([player_id, status])
+}
+
+// ── Reviews & Notifications ───────────────────────────────────────────────────
+
+model reviews {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  booking_id  String   @unique @db.Uuid
+  venue_id    String   @db.Uuid
+  player_id   String   @db.Uuid
+  rating      Int      @db.SmallInt
+  comment     String?
+  is_approved Boolean  @default(false)
+  owner_reply String?
+  created_at  DateTime @default(now()) @db.Timestamptz
+
+  booking bookings @relation(fields: [booking_id], references: [id])
+  venue   venues   @relation(fields: [venue_id], references: [id])
+  player  users    @relation(fields: [player_id], references: [id])
+
+  @@index([venue_id, is_approved])
+}
+
+model notifications {
+  id         String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String            @db.Uuid
+  type       notification_type
+  title      String
+  body       String
+  data       Json?
+  is_read    Boolean           @default(false)
+  created_at DateTime          @default(now()) @db.Timestamptz
+
+  user users @relation(fields: [user_id], references: [id])
+
+  @@index([user_id, is_read, created_at(sort: Desc)])
+}
+
+model invite_tokens {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token          String   @unique
+  match_group_id String   @db.Uuid
+  created_by     String   @db.Uuid
+  max_uses       Int      @default(10)
+  used_count     Int      @default(0)
+  expires_at     DateTime @db.Timestamptz
+  created_at     DateTime @default(now()) @db.Timestamptz
+
+  @@index([token])
+}
+
+// ── Admin Audit Log (SEC-3) ──────────────────────────────────────────────────
+
+model admin_audit_log {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  admin_id    String   @db.Uuid
+  action      String
+  target_id   String?  @db.Uuid
+  target_type String?
+  metadata    Json?
+  created_at  DateTime @default(now()) @db.Timestamptz
+
+  @@index([admin_id, created_at(sort: Desc)])
+  @@index([target_id, target_type])
+}
