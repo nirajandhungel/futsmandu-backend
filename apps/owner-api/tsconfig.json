@@ -1,0 +1,34 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "../../dist/apps/owner-api",
+    "rootDir": "src"
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ],
+  "references": [
+    {
+      "path": "../../packages/auth"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/logger"
+    },
+    {
+      "path": "../../packages/redis"
+    },
+    {
+      "path": "../../packages/types"
+    },
+    {
+      "path": "../../packages/utils"
+    }
+  ]
+}
