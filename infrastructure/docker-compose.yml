@@ -1,0 +1,301 @@
+# infrastructure/docker-compose.yml
+# Futsmandu Backend — Three API Servers + Three Worker Processes + Nginx + Redis
+#
+# Services (ports):
+#   nginx           :80/:443 → reverse proxy
+#   player-api      :3001    → players (Next.js web + React Native)
+#   owner-api       :3002    → venue owners (Flutter mobile)
+#   admin-api       :3003    → admin dashboard (Next.js web, IP-restricted)
+#   player-worker            → BullMQ: notifications/refunds/slot-expiry/stats/emails/sms
+#   owner-worker             → BullMQ: FCM push/image-processing/emails/sms
+#   admin-worker             → BullMQ: emails/admin-alerts
+#   redis           :6379    → local dev only (use Upstash in production)
+#
+# Scale player-api only:
+#   docker compose up --scale player-api=3
+
+networks:
+  futsmandu-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  redis-data:
+
+x-common-env: &common-env
+  NODE_ENV:                  ${NODE_ENV:-production}
+  DATABASE_URL:              ${DATABASE_URL}
+  DIRECT_DATABASE_URL:       ${DIRECT_DATABASE_URL}
+  # Redis can be local/docker/managed — we standardize on REDIS_URL.
+  # For this compose file's `redis` service (with password), use:
+  # redis://:<password>@redis:6379
+  REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-localdevredis}@redis:6379}
+  # Optional legacy Upstash vars (only needed if you want to run with Upstash explicitly).
+  UPSTASH_REDIS_REST_URL:    ${UPSTASH_REDIS_REST_URL:-}
+  UPSTASH_REDIS_REST_TOKEN:  ${UPSTASH_REDIS_REST_TOKEN:-}
+  UPSTASH_REDIS_IOREDIS_URL: ${UPSTASH_REDIS_IOREDIS_URL:-}
+  SENTRY_DSN:                ${SENTRY_DSN:-}
+  APP_URL:                   ${APP_URL:-http://localhost}
+  DB_POOL_SIZE:              ${DB_POOL_SIZE:-5}
+
+x-player-env: &player-env
+  <<: *common-env
+  PLAYER_JWT_SECRET:        ${PLAYER_JWT_SECRET}
+  KHALTI_SECRET_KEY:        ${KHALTI_SECRET_KEY}
+  ESEWA_SECRET_KEY:         ${ESEWA_SECRET_KEY}
+  ESEWA_PRODUCT_CODE:       ${ESEWA_PRODUCT_CODE}
+  CF_ACCOUNT_ID:            ${CF_ACCOUNT_ID}
+  R2_ACCESS_KEY_ID:         ${R2_ACCESS_KEY_ID}
+  R2_SECRET_ACCESS_KEY:     ${R2_SECRET_ACCESS_KEY}
+  R2_BUCKET_NAME:           ${R2_BUCKET_NAME}
+  R2_CDN_BASE_URL:          ${R2_CDN_BASE_URL}
+  SPARROW_SMS_TOKEN:        ${SPARROW_SMS_TOKEN}
+  FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
+  RESEND_API_KEY:           ${RESEND_API_KEY}
+
+x-owner-env: &owner-env
+  <<: *common-env
+  OWNER_JWT_SECRET:         ${OWNER_JWT_SECRET}
+  CF_ACCOUNT_ID:            ${CF_ACCOUNT_ID}
+  R2_ACCESS_KEY_ID:         ${R2_ACCESS_KEY_ID}
+  R2_SECRET_ACCESS_KEY:     ${R2_SECRET_ACCESS_KEY}
+  R2_BUCKET_NAME:           ${R2_BUCKET_NAME}
+  R2_CDN_BASE_URL:          ${R2_CDN_BASE_URL}
+  SPARROW_SMS_TOKEN:        ${SPARROW_SMS_TOKEN}
+  FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
+  RESEND_API_KEY:           ${RESEND_API_KEY}
+
+x-admin-env: &admin-env
+  <<: *common-env
+  ADMIN_JWT_SECRET:    ${ADMIN_JWT_SECRET}
+  ADMIN_ALLOWED_IPS:   ${ADMIN_ALLOWED_IPS:-}
+  RESEND_API_KEY:      ${RESEND_API_KEY}
+
+services:
+  # ── NGINX ────────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: futsmandu-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/sites-available/futsmandu-routes.conf:/etc/nginx/sites-available/futsmandu-routes.conf:ro
+      - ./nginx/proxy_params:/etc/nginx/proxy_params:ro
+    depends_on:
+      player-api:
+        condition: service_healthy
+      owner-api:
+        condition: service_healthy
+      admin-api:
+        condition: service_healthy
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ── Player API ────────────────────────────────────────────────────────────
+  # No container_name — enables --scale player-api=N
+  player-api:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/player.Dockerfile
+      target: production
+    environment:
+      <<: *player-env
+      PLAYER_API_PORT: 3001
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/v1/player/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    deploy:
+      resources:
+        limits:       { cpus: "1.0", memory: 512M }
+        reservations: { cpus: "0.25", memory: 256M }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # ── Player Worker ─────────────────────────────────────────────────────────
+  player-worker:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/worker.Dockerfile
+      target: production
+    environment:
+      <<: *player-env
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-2}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:       { cpus: "0.5", memory: 256M }
+        reservations: { cpus: "0.1", memory: 128M }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ── Owner API ─────────────────────────────────────────────────────────────
+  # Flutter mobile app. Higher memory for Sharp + multipart.
+  owner-api:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/owner-api.Dockerfile
+      target: production
+    container_name: futsmandu-owner-api
+    environment:
+      <<: *owner-env
+      OWNER_API_PORT: 3002
+      DB_POOL_SIZE:   ${OWNER_DB_POOL_SIZE:-5}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/api/v1/owner/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:       { cpus: "0.75", memory: 768M }
+        reservations: { cpus: "0.2", memory: 384M }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # ── Owner Worker ──────────────────────────────────────────────────────────
+  # FCM push to Flutter devices + Sharp resize + emails + sms
+  owner-worker:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/owner-worker.Dockerfile
+      target: production
+    environment:
+      <<: *owner-env
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-2}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:       { cpus: "0.75", memory: 512M }
+        reservations: { cpus: "0.1", memory: 256M }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ── Admin API ─────────────────────────────────────────────────────────────
+  # Web dashboard only. IP-whitelisted. No multipart, no Sharp.
+  admin-api:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/admin-api.Dockerfile
+      target: production
+    container_name: futsmandu-admin-api
+    environment:
+      <<: *admin-env
+      ADMIN_API_PORT: 3003
+      DB_POOL_SIZE:   ${ADMIN_DB_POOL_SIZE:-3}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3003/api/v1/admin/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    deploy:
+      resources:
+        limits:       { cpus: "0.5", memory: 384M }
+        reservations: { cpus: "0.1", memory: 192M }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ── Admin Worker ──────────────────────────────────────────────────────────
+  admin-worker:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/admin-worker.Dockerfile
+      target: production
+    environment:
+      <<: *admin-env
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-2}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:       { cpus: "0.25", memory: 128M }
+        reservations: { cpus: "0.05", memory: 64M }
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+  # ── Redis (dev only — use Upstash in production) ──────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: futsmandu-redis
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --loglevel warning
+      --dir /data
+      --requirepass ${REDIS_PASSWORD:-localdevredis}
+    volumes:
+      - redis-data:/data
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-localdevredis}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { memory: 512M }
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
