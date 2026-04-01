@@ -1,0 +1,10 @@
+{
+    "version": 3,
+    "file": "jwt.strategy.d.ts",
+    "sourceRoot": "",
+    "sources": [
+        "jwt.strategy.ts"
+    ],
+    "names": [],
+    "mappings": "AAOA,OAAO,EAAc,QAAQ,EAAE,MAAM,cAAc,CAAA;AACnD,OAAO,KAAK,EAAE,UAAU,EAAE,iBAAiB,EAAE,MAAM,kBAAkB,CAAA;;;;AAErE,qBACa,WAAY,SAAQ,gBAAiC;gBACpD,MAAM,EAAE,MAAM;IAQ1B,QAAQ,CAAC,OAAO,EAAE,UAAU,GAAG,iBAAiB;CAMjD"
+}
