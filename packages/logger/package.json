@@ -1,0 +1,13 @@
+{
+  "name": "@futsmandu/logger",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build --force"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.11"
+  }
+}
