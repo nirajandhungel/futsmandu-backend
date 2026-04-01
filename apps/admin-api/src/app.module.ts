@@ -1,0 +1,71 @@
+// apps/admin-api/src/app.module.ts
+// Root module for Admin API — only admin modules.
+// Owner modules are NOT imported here.
+// IP whitelist middleware applied globally via configure().
+// JWT: ADMIN_JWT_SECRET only, 8h sessions.
+// BullMQ: emails + admin-alerts queues (no notifications/sms/image queues).
+
+import { Module, MiddlewareConsumer, NestModule, RequestMethod } from '@nestjs/common'
+import { ConfigModule } from '@nestjs/config'
+import { JwtModule } from '@nestjs/jwt'
+import { ThrottlerModule } from '@nestjs/throttler'
+
+import { PrismaModule } from '@futsmandu/database'
+
+import { IpWhitelistMiddleware }   from './common/middleware/ip-whitelist.middleware.js'
+import { AdminAuthModule }         from './modules/admin-auth/admin-auth.module.js'
+import { AdminUsersModule }        from './modules/admin-users/admin-users.module.js'
+import { AdminVenuesModule }       from './modules/admin-venues/admin-venues.module.js'
+import { AdminPenaltiesModule }    from './modules/admin-penalties/admin-penalties.module.js'
+import { AdminModerationModule }   from './modules/admin-moderation/admin-moderation.module.js'
+import { AdminAnalyticsModule }    from './modules/analytics/analytics.module.js'
+import { AdminHealthModule }       from './modules/health/health.module.js'
+import { ENV } from '@futsmandu/utils'
+import { QueuesModule } from './queues.module.js'
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env.admin', '../../.env', '.env'],
+      cache: true,
+    }),
+
+    PrismaModule,
+
+    // Admin JWT — 8h sessions, separate secret from owner and player
+    JwtModule.register({
+      global: true,
+      secret: ENV['ADMIN_JWT_SECRET'],
+      signOptions: { expiresIn: '8h' },
+    }),
+
+    // Centralized BullMQ registration (prevents duplicate queue/worker instantiation)
+    QueuesModule,
+
+    // Strict rate limiting for admin — fewer users, more critical operations
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
+
+    AdminAuthModule,
+    AdminUsersModule,
+    AdminVenuesModule,
+    AdminPenaltiesModule,
+    AdminModerationModule,
+    AdminAnalyticsModule,
+    AdminHealthModule,
+  ],
+})
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    // Apply IP whitelist to all admin routes except health check
+    // Health check is public so load balancers can probe it
+    consumer
+      .apply(IpWhitelistMiddleware)
+      .exclude(
+        { path: 'api/v1/admin/health', method: RequestMethod.GET },
+      )
+      // Nest 10+ warns about legacy route wildcard syntax ('*').
+      // '*path' keeps matching all admin routes while remaining path-to-regexp compatible.
+      .forRoutes('*path')
+  }
+}
