@@ -1,0 +1,75 @@
+// apps/player-api/src/modules/payment/payment.controller.ts
+import { Controller, Post, Get, Body, Param, ParseUUIDPipe, HttpCode, HttpStatus } from '@nestjs/common'
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
+import { PaymentService } from './payment.service.js'
+import { KhaltiInitiateDto, KhaltiVerifyDto, EsewaInitiateDto, EsewaVerifyDto } from './dto/payment.dto.js'
+import { CurrentUser } from '@futsmandu/auth'
+import { PrismaService } from '@futsmandu/database'
+import type { AuthenticatedUser } from '@futsmandu/types'
+import { ForbiddenException, NotFoundException } from '@nestjs/common'
+import { formatPaisa } from '@futsmandu/utils'
+
+@ApiTags('Payments')
+@ApiBearerAuth()
+@Controller('payments')
+export class PaymentController {
+  constructor(
+    private readonly paymentService: PaymentService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  @Post('khalti-initiate')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Initiate Khalti payment — returns payment_url' })
+  khaltiInitiate(@Body() dto: KhaltiInitiateDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.paymentService.initiateKhalti(dto.bookingId, user.id)
+  }
+
+  @Post('khalti-verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify Khalti callback — server-side amount validation + confirm booking' })
+  khaltiVerify(@Body() dto: KhaltiVerifyDto) {
+    return this.paymentService.verifyKhalti(dto.pidx, dto.bookingId)
+  }
+
+  @Post('esewa-initiate')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Initiate eSewa payment — returns HMAC-signed payload' })
+  esewaInitiate(@Body() dto: EsewaInitiateDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.paymentService.initiateEsewa(dto.bookingId, user.id)
+  }
+
+  @Post('esewa-verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify eSewa callback — HMAC check + confirm booking' })
+  esewaVerify(@Body() dto: EsewaVerifyDto) {
+    return this.paymentService.verifyEsewa(dto.data)
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Payment detail (no gateway_response — sensitive)' })
+  async getPayment(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthenticatedUser) {
+    const payment = await this.prisma.payments.findUnique({
+      where: { id },
+      select: { id: true, booking_id: true, player_id: true, amount: true, gateway: true, status: true, gateway_tx_id: true, initiated_at: true, completed_at: true, refund_initiated_at: true, refund_completed_at: true },
+    })
+    if (!payment) throw new NotFoundException('Payment not found')
+    if (payment.player_id !== user.id) throw new ForbiddenException('Access denied')
+    return { ...payment, displayAmount: formatPaisa(payment.amount) }
+  }
+
+  @Get('history')
+  async history(@CurrentUser() user: AuthenticatedUser) {
+    const payments = await this.prisma.payments.findMany({
+      where: { player_id: user.id },
+      orderBy: { initiated_at: 'desc' },
+      take: 50,
+      select: {
+        id: true, booking_id: true, amount: true, gateway: true, status: true,
+        initiated_at: true, completed_at: true,
+        booking: { select: { booking_date: true, start_time: true, court: { select: { name: true, venue: { select: { name: true } } } } } },
+      },
+    })
+    return payments.map((p: any) => ({ ...p, displayAmount: formatPaisa(p.amount) }))
+  }
+}
