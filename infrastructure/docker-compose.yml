@@ -11,6 +11,11 @@
 #   admin-worker             → BullMQ: emails/admin-alerts
 #   redis           :6379    → local dev only (use Upstash in production)
 #
+# Prerequisites:
+#   Copy .env.example → .env and fill all values before running.
+#   REDIS_PASSWORD and REDIS_URL must be set — no defaults are provided here
+#   to prevent secrets from being embedded in committed files.
+#
 # Scale player-api only:
 #   docker compose up --scale player-api=3
 
@@ -25,53 +30,52 @@ volumes:
   redis-data:
 
 x-common-env: &common-env
-  NODE_ENV:                  ${NODE_ENV:-production}
-  DATABASE_URL:              ${DATABASE_URL}
-  DIRECT_DATABASE_URL:       ${DIRECT_DATABASE_URL}
-  # Redis can be local/docker/managed — we standardize on REDIS_URL.
-  # For this compose file's `redis` service (with password), use:
-  # redis://:<password>@redis:6379
-  REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD:-localdevredis}@redis:6379}
-  # Optional legacy Upstash vars (only needed if you want to run with Upstash explicitly).
-  UPSTASH_REDIS_REST_URL:    ${UPSTASH_REDIS_REST_URL:-}
-  UPSTASH_REDIS_REST_TOKEN:  ${UPSTASH_REDIS_REST_TOKEN:-}
-  UPSTASH_REDIS_IOREDIS_URL: ${UPSTASH_REDIS_IOREDIS_URL:-}
-  SENTRY_DSN:                ${SENTRY_DSN:-}
-  APP_URL:                   ${APP_URL:-http://localhost}
-  DB_POOL_SIZE:              ${DB_POOL_SIZE:-5}
+  NODE_ENV:                  ${NODE_ENV:?NODE_ENV is required}
+  DATABASE_URL:              ${DATABASE_URL:?DATABASE_URL is required}
+  DIRECT_DATABASE_URL:       ${DIRECT_DATABASE_URL:?DIRECT_DATABASE_URL is required}
+  # REDIS_URL must be set in .env.
+  # Local Docker value:  redis://:<password>@redis:6379
+  # Upstash production:  rediss://<user>:<token>@<host>:6380
+  REDIS_URL:                 ${REDIS_URL:?REDIS_URL is required}
+  UPSTASH_REDIS_REST_URL:    ${UPSTASH_REDIS_REST_URL:?UPSTASH_REDIS_REST_URL is required (set empty if unused)}
+  UPSTASH_REDIS_REST_TOKEN:  ${UPSTASH_REDIS_REST_TOKEN:?UPSTASH_REDIS_REST_TOKEN is required (set empty if unused)}
+  UPSTASH_REDIS_IOREDIS_URL: ${UPSTASH_REDIS_IOREDIS_URL:?UPSTASH_REDIS_IOREDIS_URL is required (set empty if unused)}
+  SENTRY_DSN:                ${SENTRY_DSN:?SENTRY_DSN is required (set empty if unused)}
+  APP_URL:                   ${APP_URL:?APP_URL is required}
+  DB_POOL_SIZE:              ${DB_POOL_SIZE:?DB_POOL_SIZE is required}
 
 x-player-env: &player-env
   <<: *common-env
-  PLAYER_JWT_SECRET:        ${PLAYER_JWT_SECRET}
-  KHALTI_SECRET_KEY:        ${KHALTI_SECRET_KEY}
-  ESEWA_SECRET_KEY:         ${ESEWA_SECRET_KEY}
-  ESEWA_PRODUCT_CODE:       ${ESEWA_PRODUCT_CODE}
-  CF_ACCOUNT_ID:            ${CF_ACCOUNT_ID}
-  R2_ACCESS_KEY_ID:         ${R2_ACCESS_KEY_ID}
-  R2_SECRET_ACCESS_KEY:     ${R2_SECRET_ACCESS_KEY}
-  R2_BUCKET_NAME:           ${R2_BUCKET_NAME}
-  R2_CDN_BASE_URL:          ${R2_CDN_BASE_URL}
-  SPARROW_SMS_TOKEN:        ${SPARROW_SMS_TOKEN}
-  FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
-  RESEND_API_KEY:           ${RESEND_API_KEY}
+  PLAYER_JWT_SECRET:        ${PLAYER_JWT_SECRET:?PLAYER_JWT_SECRET is required}
+  KHALTI_SECRET_KEY:        ${KHALTI_SECRET_KEY:?KHALTI_SECRET_KEY is required (set empty if unused)}
+  ESEWA_SECRET_KEY:         ${ESEWA_SECRET_KEY:?ESEWA_SECRET_KEY is required (set empty if unused)}
+  ESEWA_PRODUCT_CODE:       ${ESEWA_PRODUCT_CODE:?ESEWA_PRODUCT_CODE is required (set empty if unused)}
+  CF_ACCOUNT_ID:            ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is required (set empty if unused)}
+  R2_ACCESS_KEY_ID:         ${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID is required (set empty if unused)}
+  R2_SECRET_ACCESS_KEY:     ${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is required (set empty if unused)}
+  R2_BUCKET_NAME:           ${R2_BUCKET_NAME:?R2_BUCKET_NAME is required (set empty if unused)}
+  R2_CDN_BASE_URL:          ${R2_CDN_BASE_URL:?R2_CDN_BASE_URL is required (set empty if unused)}
+  SPARROW_SMS_TOKEN:        ${SPARROW_SMS_TOKEN:?SPARROW_SMS_TOKEN is required (set empty if unused)}
+  FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:?FIREBASE_SERVICE_ACCOUNT is required (set empty if unused)}
+  RESEND_API_KEY:           ${RESEND_API_KEY:?RESEND_API_KEY is required (set empty if unused)}
 
 x-owner-env: &owner-env
   <<: *common-env
-  OWNER_JWT_SECRET:         ${OWNER_JWT_SECRET}
-  CF_ACCOUNT_ID:            ${CF_ACCOUNT_ID}
-  R2_ACCESS_KEY_ID:         ${R2_ACCESS_KEY_ID}
-  R2_SECRET_ACCESS_KEY:     ${R2_SECRET_ACCESS_KEY}
-  R2_BUCKET_NAME:           ${R2_BUCKET_NAME}
-  R2_CDN_BASE_URL:          ${R2_CDN_BASE_URL}
-  SPARROW_SMS_TOKEN:        ${SPARROW_SMS_TOKEN}
-  FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
-  RESEND_API_KEY:           ${RESEND_API_KEY}
+  OWNER_JWT_SECRET:         ${OWNER_JWT_SECRET:?OWNER_JWT_SECRET is required}
+  CF_ACCOUNT_ID:            ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is required (set empty if unused)}
+  R2_ACCESS_KEY_ID:         ${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID is required (set empty if unused)}
+  R2_SECRET_ACCESS_KEY:     ${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is required (set empty if unused)}
+  R2_BUCKET_NAME:           ${R2_BUCKET_NAME:?R2_BUCKET_NAME is required (set empty if unused)}
+  R2_CDN_BASE_URL:          ${R2_CDN_BASE_URL:?R2_CDN_BASE_URL is required (set empty if unused)}
+  SPARROW_SMS_TOKEN:        ${SPARROW_SMS_TOKEN:?SPARROW_SMS_TOKEN is required (set empty if unused)}
+  FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:?FIREBASE_SERVICE_ACCOUNT is required (set empty if unused)}
+  RESEND_API_KEY:           ${RESEND_API_KEY:?RESEND_API_KEY is required (set empty if unused)}
 
 x-admin-env: &admin-env
   <<: *common-env
-  ADMIN_JWT_SECRET:    ${ADMIN_JWT_SECRET}
-  ADMIN_ALLOWED_IPS:   ${ADMIN_ALLOWED_IPS:-}
-  RESEND_API_KEY:      ${RESEND_API_KEY}
+  ADMIN_JWT_SECRET:    ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET is required}
+  ADMIN_ALLOWED_IPS:   ${ADMIN_ALLOWED_IPS:?ADMIN_ALLOWED_IPS is required}
+  RESEND_API_KEY:      ${RESEND_API_KEY:?RESEND_API_KEY is required (set empty if unused)}
 
 services:
   # ── NGINX ────────────────────────────────────────────────────────────────
@@ -143,7 +147,7 @@ services:
       target: production
     environment:
       <<: *player-env
-      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-2}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:?WORKER_DB_POOL_SIZE is required}
     depends_on:
       redis:
         condition: service_healthy
@@ -169,7 +173,7 @@ services:
     environment:
       <<: *owner-env
       OWNER_API_PORT: 3002
-      DB_POOL_SIZE:   ${OWNER_DB_POOL_SIZE:-5}
+      DB_POOL_SIZE:   ${OWNER_DB_POOL_SIZE:?OWNER_DB_POOL_SIZE is required}
     depends_on:
       redis:
         condition: service_healthy
@@ -199,7 +203,7 @@ services:
       target: production
     environment:
       <<: *owner-env
-      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-2}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:?WORKER_DB_POOL_SIZE is required}
     depends_on:
       redis:
         condition: service_healthy
@@ -225,7 +229,7 @@ services:
     environment:
       <<: *admin-env
       ADMIN_API_PORT: 3003
-      DB_POOL_SIZE:   ${ADMIN_DB_POOL_SIZE:-3}
+      DB_POOL_SIZE:   ${ADMIN_DB_POOL_SIZE:?ADMIN_DB_POOL_SIZE is required}
     depends_on:
       redis:
         condition: service_healthy
@@ -254,7 +258,7 @@ services:
       target: production
     environment:
       <<: *admin-env
-      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-2}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:?WORKER_DB_POOL_SIZE is required}
     depends_on:
       redis:
         condition: service_healthy
@@ -281,14 +285,14 @@ services:
       --maxmemory-policy allkeys-lru
       --loglevel warning
       --dir /data
-      --requirepass ${REDIS_PASSWORD:-localdevredis}
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     volumes:
       - redis-data:/data
     networks:
       - futsmandu-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-localdevredis}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
