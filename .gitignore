@@ -1,13 +1,39 @@
+# Environment
 .env
-.env.*
+.env.local
+.env.*.local
 !.env.example
+
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 build/
+
+# Coverage
 coverage/
+
+# Logs
 *.log
+
+# OS files
 .DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Generated files
+generated/
 prisma/generated/
+
+# Databases / persistence
 redis-data/
 postgres-data/
+
+# Turbo / caching
 .turbo/
+node_modules/.cache/
+
