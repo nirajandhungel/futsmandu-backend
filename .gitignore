@@ -37,6 +37,9 @@ packages/database/generated
 redis-data/
 postgres-data/
 
+# Docker saved image tarballs
+*.tar
+
 # Turbo / caching
 .turbo/
 node_modules/.cache/
