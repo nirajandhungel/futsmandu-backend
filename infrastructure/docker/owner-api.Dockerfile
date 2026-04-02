@@ -3,7 +3,7 @@
 # Multi-stage build: builder compiles TS, production stage runs minimal image.
 # Sharp requires python3/make/g++ for native module compilation in builder stage.
 
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 # Sharp native bindings require build tools
 RUN apk add --no-cache python3 make g++
@@ -43,36 +43,40 @@ RUN npx prisma generate --schema=packages/database/prisma/schema.prisma
 COPY packages/ ./packages/
 COPY apps/owner-api/ ./apps/owner-api/
 
-# Build packages in dependency order, then the app
-RUN npm run build --workspace=packages/types   || true
-RUN npm run build --workspace=packages/logger  || true
-RUN npm run build --workspace=packages/redis   || true
-RUN npm run build --workspace=packages/database || true
-RUN npm run build --workspace=packages/auth    || true
-RUN npm run build --workspace=packages/utils   || true
+# Build packages in dependency order, then the app.
+# No || true — build failures must be loud. A silently broken package
+# produces a broken runtime image that is harder to debug than a build failure.
+RUN npm run build --workspace=packages/types
+RUN npm run build --workspace=packages/logger
+RUN npm run build --workspace=packages/redis
+RUN npm run build --workspace=packages/database
+RUN npm run build --workspace=packages/auth
+RUN npm run build --workspace=packages/utils
 RUN npm run build --workspace=apps/owner-api
 
 # Prune dev dependencies for production image
 RUN npm prune --production
 
 # ── Production image ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS production
+FROM node:22-alpine AS production
 
-# Sharp needs these at runtime for image processing
-RUN apk add --no-cache vips-dev fftw-dev wget
+# vips  — Sharp runtime library (image processing).
+# fftw  — Fast Fourier Transform, required by libvips for certain operations.
+# wget  — used by Docker HEALTHCHECK.
+# Note: vips-dev (headers) is NOT needed at runtime — that is a builder-only concern.
+RUN apk add --no-cache vips fftw wget
 
 # Non-root user for security
 RUN addgroup -g 1001 -S nodejs && adduser -S owner-api -u 1001
 
 WORKDIR /app
 
-# Copy compiled output + production node_modules + Prisma artifacts
-COPY --from=builder --chown=owner-api:nodejs /app/dist                         ./dist
-COPY --from=builder --chown=owner-api:nodejs /app/node_modules                 ./node_modules
-COPY --from=builder --chown=owner-api:nodejs /app/packages                     ./packages
-COPY --from=builder --chown=owner-api:nodejs /app/packages/database/prisma     ./packages/database/prisma
-COPY --from=builder --chown=owner-api:nodejs /app/packages/database/generated  ./packages/database/generated
-COPY --from=builder --chown=owner-api:nodejs /app/package.json                 ./
+# Copy compiled output and production node_modules from builder.
+# packages/ already contains packages/database/generated — no need to copy it twice.
+COPY --from=builder --chown=owner-api:nodejs /app/dist         ./dist
+COPY --from=builder --chown=owner-api:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=owner-api:nodejs /app/packages     ./packages
+COPY --from=builder --chown=owner-api:nodejs /app/package.json ./
 
 USER owner-api
 
