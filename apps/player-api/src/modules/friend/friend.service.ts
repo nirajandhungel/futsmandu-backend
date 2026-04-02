@@ -89,11 +89,11 @@ export class FriendService {
       select: { name: true },
     })
     await this.notifQueue
-      .add('friend-request', {
-        type: 'FRIEND_REQUEST',
-        userId: recipientId,
-        data: { requesterId, requesterName: requester?.name },
-      })
+      .add(
+        'friend-request',
+        { type: 'FRIEND_REQUEST', userId: recipientId, data: { requesterId, requesterName: requester?.name } },
+        { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+      )
       .catch(() => null)
 
     return friendship

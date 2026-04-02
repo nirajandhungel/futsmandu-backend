@@ -113,9 +113,11 @@ export class MatchService {
     }).then(async (result: any) => {
       if (!result.member.status || result.member.status === 'pending') {
         await this.notifQueue
-          .add('match-join-request', {
-            type: 'MATCH_INVITE', userId: result.adminId, data: { matchGroupId: matchId },
-          })
+          .add(
+            'match-join-request',
+            { type: 'MATCH_INVITE', userId: result.adminId, data: { matchGroupId: matchId } },
+            { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+          )
           .catch(() => null)
       }
       return result.member
@@ -201,7 +203,11 @@ export class MatchService {
       where: { id: matchId },
       data: { result_winner: winner },
     })
-    await this.statsQueue.add('update-elo', { matchGroupId: matchId, winner }).catch(() => null)
+    await this.statsQueue.add(
+      'update-elo',
+      { matchGroupId: matchId, winner },
+      { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+    ).catch(() => null)
     return { message: 'Result recorded', winner }
   }
 
