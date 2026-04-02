@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "setup": "npm install && npm run prisma:generate && npm run build:packages",
-    "clean": "find . -name 'node_modules' -type d -prune -exec rm -rf {} + ; find . -name 'dist' -type d -not -path '*/node_modules/*' -prune -exec rm -rf {} + ; find . -name '*.log' -not -path '*/node_modules/*' -delete ; rm -f package-lock.json ; echo 'Clean complete. Run npm run setup to reinstall.'",
+    "clean": "find . -name 'node_modules' -type d -prune -exec rm -rf {} + ; find . -name 'dist' -type d -not -path '*/node_modules/*' -prune -exec rm -rf {} + ; find . -name '*.log' -not -path '*/node_modules/*' -delete ; echo 'Clean complete. Run npm run setup to reinstall.'",
     "fresh": "npm run clean && npm run setup",
 
     "prisma:generate": "npm run prisma:generate --workspace=@futsmandu/database",
