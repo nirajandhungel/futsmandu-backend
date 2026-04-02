@@ -57,12 +57,11 @@ export class AuthService {
     })
 
     await this.emailQueue
-      .add('verification-email', {
-        type: 'verification-email',
-        to: user.email,
-        name: user.name,
-        data: { userId: user.id },
-      })
+      .add(
+        'verification-email',
+        { type: 'verification-email', to: user.email, name: user.name, data: { userId: user.id } },
+        { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+      )
       .catch((e: unknown) => this.logger.error('Failed to enqueue verification email', e))
 
     return user
@@ -149,12 +148,11 @@ export class AuthService {
         { expiresIn: '1h', secret: ENV['PLAYER_JWT_SECRET'] },
       )
       await this.emailQueue
-        .add('password-reset', {
-          type: 'password-reset',
-          to: email,
-          name: user.name,
-          data: { userId: user.id, token },
-        })
+        .add(
+          'password-reset',
+          { type: 'password-reset', to: email, name: user.name, data: { userId: user.id, token } },
+          { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+        )
         .catch((e: unknown) => this.logger.error('Failed to enqueue password reset', e))
     }
     return { message: 'If this email is registered, a reset link has been sent' }
