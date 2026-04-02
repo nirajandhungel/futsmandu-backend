@@ -1,32 +1,24 @@
-// apps/owner-api/src/workers/processors/sms.processor.ts
-// SMS processor for owner-api — Sparrow SMS Nepal.
-// Sends booking alerts and verification status updates to owner phone.
+// apps/player-api/src/workers/processors/sms.processor.ts
+// FIX: Extracted from refund.processor.ts where it lived with aliased NestJS decorators.
+// FIX: Added AbortSignal timeout — Sparrow SMS call had no timeout, could hang indefinitely.
+
 import { Processor, WorkerHost } from '@nestjs/bullmq'
 import { Logger } from '@nestjs/common'
 import { Job } from 'bullmq'
+import type { SmsJobData } from '@futsmandu/types'
 import { ENV } from '@futsmandu/utils'
 
-interface SmsJobData {
-  phone: string
-  message: string
-}
+const GATEWAY_TIMEOUT_MS = 10_000
 
 @Processor('sms')
-export class OwnerSmsProcessor extends WorkerHost {
-  private readonly logger = new Logger(OwnerSmsProcessor.name)
+export class SmsProcessor extends WorkerHost {
+  private readonly logger = new Logger(SmsProcessor.name)
 
   async process(job: Job<SmsJobData>): Promise<void> {
-    if (job.name !== 'send-sms') return
     const { phone, message } = job.data
 
-    const token = ENV['SPARROW_SMS_TOKEN']
-    if (!token) {
-      this.logger.warn('SPARROW_SMS_TOKEN not set — owner SMS not sent')
-      return
-    }
-
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 10_000)
+    const timer = setTimeout(() => controller.abort(), GATEWAY_TIMEOUT_MS)
 
     let res: Response
     try {
@@ -34,10 +26,10 @@ export class OwnerSmsProcessor extends WorkerHost {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          token,
+          token: ENV['SPARROW_SMS_TOKEN'],
           from: 'Futsmandu',
-          to:   phone,
-          text: message.slice(0, 160),
+          to: phone,
+          text: message,
         }),
         signal: controller.signal,
       })
@@ -48,7 +40,6 @@ export class OwnerSmsProcessor extends WorkerHost {
     if (!res.ok) {
       throw new Error(`Sparrow SMS failed: ${res.status} ${await res.text()}`)
     }
-
-    this.logger.log(`Owner SMS sent to ${phone}`, { jobId: job.id })
+    this.logger.log(`SMS sent to ${phone}`, { jobId: job.id })
   }
 }

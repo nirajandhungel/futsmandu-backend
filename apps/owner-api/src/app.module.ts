@@ -10,6 +10,7 @@ import { JwtModule } from '@nestjs/jwt'
 import { ThrottlerModule } from '@nestjs/throttler'
 
 import { PrismaModule } from '@futsmandu/database'
+import { RedisModule } from '@futsmandu/redis'
 
 import { OwnerAuthModule }       from './modules/owner-auth/owner-auth.module.js'
 import { VenueManagementModule } from './modules/venue-management/venue-management.module.js'
@@ -33,6 +34,7 @@ import { QueuesModule } from './queues.module.js'
     }),
 
     PrismaModule,
+    RedisModule,
 
     // Owner JWT — 15m access, 30d refresh (Flutter Keychain/SecureStorage)
     // NOT global — imported only in OwnerAuthModule so the secret stays scoped

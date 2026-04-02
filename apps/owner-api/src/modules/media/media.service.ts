@@ -106,7 +106,7 @@ export class MediaService {
       .add(
         'resize-image',
         { key, targetWidth, targetHeight, bucket: ENV['R2_BUCKET_NAME'] },
-        { attempts: 2, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: 50 },
+        { attempts: 2, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: 50, removeOnFail: 100 },
       )
       .catch((e: unknown) => this.logger.error('Failed to enqueue image resize', e))
   }

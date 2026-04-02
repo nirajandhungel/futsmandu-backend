@@ -93,7 +93,7 @@ export class NotificationsService {
       .add(
         'owner-notification',
         { ownerId, type, data: ctx },
-        { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: 100 },
+        { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: 100, removeOnFail: 200 },
       )
       .catch((e: unknown) => this.logger.error('Failed to enqueue owner notification', e))
   }

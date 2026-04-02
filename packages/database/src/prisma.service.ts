@@ -9,36 +9,46 @@
 // PgBouncer-safe: connection_limit per instance, pgbouncer=true required in DATABASE_URL.
 // Pool budget: player-api=5/instance, owner-api=3/instance, worker=2/instance.
 
-import { Injectable, OnModuleDestroy, OnModuleInit, Logger } from '@nestjs/common'
+import { Injectable, InternalServerErrorException, OnModuleDestroy, OnModuleInit, Logger } from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
 import * as PrismaGenerated from '../generated/prisma/index.js'
 import { ENV } from '@futsmandu/utils'
 
 // Prisma's generated client is shipped in a shape that doesn't always expose
-// `PrismaClient` as a named ESM export under `type: module`.
-// Pull it from the module namespace (or its default export) at runtime.
+// `PrismaClient` as a named ESM export under NodeNext/ESM.
 const PrismaClient =
   (PrismaGenerated as any).PrismaClient ?? (PrismaGenerated as any).default?.PrismaClient
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name)
+  private readonly config?: ConfigService
 
-  constructor() {
-    // PgBouncer: append connection_limit + pool_timeout to DATABASE_URL.
-    // DATABASE_URL must already contain ?pgbouncer=true (set in .env).
-    // pgbouncer=true disables Prisma prepared statement caching, which is
-    // incompatible with PgBouncer transaction-mode pooling.
-    const baseUrl  = ENV['DATABASE_URL']
-    const poolSize = ENV['DB_POOL_SIZE'] ?? '5'
-    const sep      = baseUrl.includes('?') ? '&' : '?'
-    const url      = `${baseUrl}${sep}connection_limit=${poolSize}&pool_timeout=10`
+  constructor(config?: ConfigService) {
+    // NOTE: super() must run before any `this.*` access in derived classes.
+    const baseUrl =
+      config?.get<string>('DATABASE_URL', { infer: true }) ??
+      ENV['DATABASE_URL']
+    if (!baseUrl) {
+      throw new InternalServerErrorException('Missing DATABASE_URL')
+    }
 
+    const poolSizeRaw =
+      config?.get<string>('DATABASE_POOL_SIZE') ??
+      config?.get<string>('DB_POOL_SIZE') ??
+      ENV['DB_POOL_SIZE'] ??
+      '5'
+    const poolSize = Number.parseInt(poolSizeRaw, 10)
+    const sep = baseUrl.includes('?') ? '&' : '?'
+    const url = `${baseUrl}${sep}connection_limit=${poolSize}&pool_timeout=10`
+
+    const nodeEnv = config?.get<string>('NODE_ENV') ?? ENV['NODE_ENV']
     super({
       datasources: { db: { url } },
       log:
-        ENV['NODE_ENV'] === 'development'
+        nodeEnv === 'development'
           ? [
-              { emit: 'event',  level: 'query' },
+              { emit: 'event', level: 'query' },
               { emit: 'stdout', level: 'warn' },
               { emit: 'stdout', level: 'error' },
             ]
@@ -46,30 +56,68 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
               { emit: 'stdout', level: 'warn' },
               { emit: 'stdout', level: 'error' },
             ],
-      errorFormat: ENV['NODE_ENV'] === 'production' ? 'minimal' : 'pretty',
+      errorFormat: nodeEnv === 'production' ? 'minimal' : 'pretty',
     })
-  }
 
-  async onModuleInit(): Promise<void> {
-    await this.$connect()
-    this.logger.log(
-      `✅ Database connected (pool_size=${ENV['DB_POOL_SIZE'] ?? 5}, ` +
-      `node=${ENV['HOSTNAME'] ?? 'local'})`,
-    )
+    this.config = config
 
-    if (ENV['NODE_ENV'] === 'development') {
-      // Prisma emits a `query` event; typing is intentionally kept lightweight here.
+    // Ensure Prisma disconnects cleanly when the process is about to exit.
+    // Prisma 5 throws if `$on('beforeExit')` is used with the library engine.
+    try {
+      this.$on('beforeExit', async () => {
+        try {
+          await this.$disconnect()
+        } catch {
+          // best-effort; process is already exiting
+        }
+      })
+    } catch {
+      process.on('beforeExit', async () => {
+        try {
+          await this.$disconnect()
+        } catch {
+          // best-effort
+        }
+      })
+    }
+
+    if (nodeEnv === 'development') {
+      // Prisma emits a `query` event. Log only slow queries.
       this.$on('query', (e: { query: string; duration: number }) => {
         if (e.duration > 500) {
           this.logger.warn(`Slow query (${e.duration}ms): ${e.query}`)
         }
       })
     }
+
+    // do not connect here; OnModuleInit handles connectivity per requirements
+  }
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.$connect()
+    } catch (err: unknown) {
+      this.logger.error('Database unreachable at startup', String(err))
+      // Postgres is a hard dependency; fail fast.
+      process.exit(1)
+    }
+
+    const poolSize =
+      this.config?.get<string>('DATABASE_POOL_SIZE') ??
+      this.config?.get<string>('DB_POOL_SIZE') ??
+      ENV['DB_POOL_SIZE'] ??
+      '5'
+    const node = this.config?.get<string>('HOSTNAME') ?? ENV['HOSTNAME'] ?? 'local'
+    this.logger.log(`✅ Database connected (pool_size=${poolSize}, node=${node})`)
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.$disconnect()
-    this.logger.log('Database disconnected')
+    try {
+      await this.$disconnect()
+      this.logger.log('Database disconnected')
+    } catch (err: unknown) {
+      this.logger.warn('Database disconnect failed', String(err))
+    }
   }
 
   /**
@@ -81,7 +129,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       await Promise.race([
         this.$queryRaw`SELECT 1`,
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('DB health check timeout')), 5000),
+          setTimeout(() => reject('DB health check timeout'), 5000),
         ),
       ])
       return true

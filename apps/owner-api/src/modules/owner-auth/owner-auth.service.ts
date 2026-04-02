@@ -54,12 +54,11 @@ export class OwnerAuthService {
     })
 
     await this.emailQueue
-      .add('owner-welcome', {
-        type: 'owner-welcome',
-        to: owner.email,
-        name: owner.name,
-        data: { ownerId: owner.id },
-      })
+      .add(
+        'owner-welcome',
+        { type: 'owner-welcome', to: owner.email, name: owner.name, data: { ownerId: owner.id } },
+        { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+      )
       .catch((e: unknown) => this.logger.error('Failed to enqueue welcome email', e))
 
     return owner

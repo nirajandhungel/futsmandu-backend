@@ -3,46 +3,42 @@
 // Checks DB connectivity, Redis connectivity, and reports queue worker count.
 
 import { Controller, Get } from '@nestjs/common'
-import { InjectQueue } from '@nestjs/bullmq'
-import { Queue } from 'bullmq'
 import { PrismaService } from '@futsmandu/database'
 import { RedisService } from '@futsmandu/redis'
 import { Public } from '@futsmandu/auth'
-import { ENV } from '@futsmandu/utils'
+import type { FastifyReply } from 'fastify'
+import { Res } from '@nestjs/common'
 
 @Controller()
 export class HealthController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
-    @InjectQueue('notifications') private readonly notifQueue: Queue,
-    @InjectQueue('slot-expiry')   private readonly expiryQueue: Queue,
   ) {}
 
   @Public()
   @Get('health')
-  async check() {
-    const [dbOk, redisOk, notifCounts, expiryCounts] = await Promise.all([
-      this.prisma.isHealthy(),
-      this.redis.ping(),
-      this.notifQueue.getJobCounts().catch(() => null),
-      this.expiryQueue.getJobCounts().catch(() => null),
-    ])
+  async check(@Res({ passthrough: true }) reply: FastifyReply) {
+    const uptime = Math.floor(process.uptime())
 
-    const healthy = dbOk && redisOk
+    const redisOk = this.redis.isConnected()
+    const dbOk = await this.prisma.isHealthy()
 
-    return {
-      status: healthy ? 'healthy' : 'degraded',
-      timestamp: new Date().toISOString(),
-      checks: {
-        database: dbOk    ? 'ok' : 'error',
-        redis:    redisOk ? 'ok' : 'error',
-      },
-      queues: {
-        notifications: notifCounts ?? 'unavailable',
-        slotExpiry:    expiryCounts ?? 'unavailable',
-      },
-      version: ENV['npm_package_version'] ?? '1.0.0',
+    if (!dbOk) {
+      reply.status(503)
+      return {
+        status: 'unhealthy',
+        redis: redisOk ? 'connected' : 'degraded',
+        db: 'down',
+        uptime,
+      }
     }
+
+    reply.status(200)
+    if (!redisOk) {
+      return { status: 'degraded', redis: 'degraded', db: 'up', uptime }
+    }
+
+    return { status: 'healthy', redis: 'connected', db: 'up', uptime }
   }
 }

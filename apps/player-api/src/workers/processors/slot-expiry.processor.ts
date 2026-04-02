@@ -33,7 +33,11 @@ export class SlotExpiryProcessor extends WorkerHost {
 
       if (booking.player_id) {
         await this.notifQueue
-          .add('slot-expired', { type: 'SLOT_EXPIRING', userId: booking.player_id, data: { bookingId: booking.id } })
+          .add(
+            'slot-expired',
+            { type: 'SLOT_EXPIRING', userId: booking.player_id, data: { bookingId: booking.id } },
+            { attempts: 2, backoff: { type: 'exponential', delay: 3_000 }, removeOnComplete: 100, removeOnFail: 200 },
+          )
           .catch(() => null)
       }
     }

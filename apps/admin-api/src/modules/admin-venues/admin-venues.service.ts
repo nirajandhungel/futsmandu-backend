@@ -99,12 +99,11 @@ export class AdminVenuesService {
 
     // Notify owner
     await this.emailQueue
-      .add('verification-approved', {
-        type: 'verification-approved',
-        to: venue.owner.email,
-        name: venue.owner.name,
-        data: { venueName: venue.name },
-      })
+      .add(
+        'verification-approved',
+        { type: 'verification-approved', to: venue.owner.email, name: venue.owner.name, data: { venueName: venue.name } },
+        { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+      )
       .catch((e: unknown) => this.logger.error('Email queue error', e))
 
     this.logger.log(`Venue ${venueId} verified by admin ${adminId}`)
@@ -153,12 +152,11 @@ export class AdminVenuesService {
     }
 
     await this.emailQueue
-      .add('verification-rejected', {
-        type: 'verification-rejected',
-        to: venue.owner.email,
-        name: venue.owner.name,
-        data: { venueName: venue.name, reason },
-      })
+      .add(
+        'verification-rejected',
+        { type: 'verification-rejected', to: venue.owner.email, name: venue.owner.name, data: { venueName: venue.name, reason } },
+        { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+      )
       .catch((e: unknown) => this.logger.error('Email queue error', e))
 
     this.logger.log(`Venue ${venueId} rejected by admin ${adminId}: ${reason}`)
