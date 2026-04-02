@@ -45,11 +45,17 @@ For frontend integration testing, keep all services (including workers) running.
 From repo root:
 
 ```bash
-cp .env.dev .env
+cp .env.example .env
+nano .env
 ```
 
-For local testing this works immediately.
-For staging/production handoff, replace values in `.env` with real credentials.
+Fill in real values in `.env`. Do not commit `.env` (it is gitignored).
+
+If you want the vars exported in your current shell (useful for debugging / ad-hoc commands):
+
+```bash
+set -a; source .env; set +a
+```
 
 ### 2) Build and run
 
@@ -62,12 +68,71 @@ npm run docker:up
 ```bash
 npm run docker:ps
 npm run docker:logs
+npm run nginx:test
 ```
 
 ### 4) Stop
 
 ```bash
 npm run docker:down
+```
+
+## Production Runbook (do these in order)
+
+From repo root:
+
+### 0) One-time prerequisites
+
+```bash
+cp .env.example .env
+nano .env
+```
+
+Optional export into current shell:
+
+```bash
+set -a; source .env; set +a
+```
+
+### 1) Pull base images
+
+```bash
+docker compose --env-file .env -f infrastructure/docker-compose.yml pull
+```
+
+### 2) Build the app images
+
+Recommended (clean rebuild):
+
+```bash
+docker compose --env-file .env -f infrastructure/docker-compose.yml build --no-cache
+```
+
+### 3) Start / update the stack
+
+```bash
+docker compose --env-file .env -f infrastructure/docker-compose.yml up -d
+```
+
+### 4) Verify health
+
+```bash
+docker compose --env-file .env -f infrastructure/docker-compose.yml ps
+docker compose --env-file .env -f infrastructure/docker-compose.yml logs -f --tail=200
+docker exec -it futsmandu-nginx nginx -t
+```
+
+### 5) Reload nginx after config changes (no downtime)
+
+```bash
+docker exec -it futsmandu-nginx nginx -s reload
+```
+
+### 6) Stop / restart
+
+```bash
+docker compose --env-file .env -f infrastructure/docker-compose.yml down
+docker compose --env-file .env -f infrastructure/docker-compose.yml restart
 ```
 
 ## Option B: Share Prebuilt Images (best for frontend handoff)
@@ -127,6 +192,12 @@ npm run docker:up
 
 # watch logs
 npm run docker:logs
+
+# validate nginx config
+npm run nginx:test
+
+# reload nginx config
+npm run nginx:reload
 
 # rebuild after backend changes
 npm run docker:up
