@@ -128,7 +128,11 @@ export class NotificationProcessor extends WorkerHost {
     // 3. SMS for high-priority types
     if (payload.sendSms && user?.phone) {
       await this.smsQueue
-        .add('send-sms', { phone: user.phone, message: `Futsmandu: ${payload.body}` } satisfies SmsJobData)
+        .add(
+          'send-sms',
+          { phone: user.phone, message: `Futsmandu: ${payload.body}` } satisfies SmsJobData,
+          { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 50, removeOnFail: 100 },
+        )
         .catch((e: unknown) => this.logger.error('Failed to enqueue SMS', e, { jobId: job.id }))
     }
   }
