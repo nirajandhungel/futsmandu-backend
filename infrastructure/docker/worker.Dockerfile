@@ -2,7 +2,7 @@
 # BullMQ worker container — same build as player API, different CMD.
 # Workers are stateless and scale independently of the API containers.
 
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 RUN apk add --no-cache python3 make g++
 
@@ -36,34 +36,42 @@ RUN npx prisma generate --schema=packages/database/prisma/schema.prisma
 COPY packages/ ./packages/
 COPY apps/player-api/ ./apps/player-api/
 
-RUN npm run build --workspace=packages/types   || true
-RUN npm run build --workspace=packages/logger  || true
-RUN npm run build --workspace=packages/redis   || true
-RUN npm run build --workspace=packages/database || true
-RUN npm run build --workspace=packages/auth    || true
-RUN npm run build --workspace=packages/utils   || true
+# No || true — build failures must be loud.
+RUN npm run build --workspace=packages/types
+RUN npm run build --workspace=packages/logger
+RUN npm run build --workspace=packages/redis
+RUN npm run build --workspace=packages/database
+RUN npm run build --workspace=packages/auth
+RUN npm run build --workspace=packages/utils
 RUN npm run build --workspace=apps/player-api
 
 RUN npm prune --production
 
-FROM node:20-alpine AS production
+FROM node:22-alpine AS production
 
 RUN addgroup -g 1001 -S nodejs && adduser -S worker -u 1001
 
 WORKDIR /app
 
-COPY --from=builder --chown=worker:nodejs /app/dist                    ./dist
-COPY --from=builder --chown=worker:nodejs /app/node_modules            ./node_modules
-COPY --from=builder --chown=worker:nodejs /app/packages                ./packages
-COPY --from=builder --chown=worker:nodejs /app/packages/database/prisma ./packages/database/prisma
-COPY --from=builder --chown=worker:nodejs /app/packages/database/generated ./packages/database/generated
-COPY --from=builder --chown=worker:nodejs /app/package.json            ./
+# Copy compiled output and production node_modules from builder.
+# packages/ already contains packages/database/generated — no need to copy it twice.
+COPY --from=builder --chown=worker:nodejs /app/dist         ./dist
+COPY --from=builder --chown=worker:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=worker:nodejs /app/packages     ./packages
+COPY --from=builder --chown=worker:nodejs /app/package.json ./
+
+# Copy the health check script.
+# Uses a raw TCP connect to REDIS_URL — no ioredis require() needed, no CWD issues.
+# See scripts/worker-health.mjs for implementation details.
+COPY --chown=worker:nodejs scripts/worker-health.mjs ./scripts/worker-health.mjs
 
 USER worker
 
-# Workers have no HTTP port — outbound connections only (Redis + DB + external APIs)
+# Workers have no HTTP port — health is checked by probing Redis reachability.
+# The script is dependency-free (Node built-ins only) so it works regardless of
+# how node_modules are laid out inside the container.
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-  CMD node -e "const Redis=require('ioredis'); const url=process.env.REDIS_URL || process.env.UPSTASH_REDIS_IOREDIS_URL || ('redis://:' + (process.env.REDIS_PASSWORD || 'localdevredis') + '@redis:6379'); const opts=/^rediss:\\/\\//.test(url) ? {tls:{rejectUnauthorized:false}} : {}; new Redis(url,opts).ping().then(()=>process.exit(0)).catch(()=>process.exit(1))"
+  CMD node /app/scripts/worker-health.mjs
 
 # Run the worker process (not the API)
 CMD ["node", "dist/apps/player-api/workers/main.js"]
