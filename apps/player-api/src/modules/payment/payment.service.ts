@@ -34,8 +34,27 @@ function parsePaisa(amountStr: string): number {
 
 // ── Gateway implementations ───────────────────────────────────────────────
 
+/** Milliseconds before an outbound gateway request is aborted. */
+const GATEWAY_TIMEOUT_MS = 15_000
+
+/**
+ * Thin wrapper around fetch that attaches an AbortSignal timeout.
+ * Without this, a hung gateway connection blocks the calling thread
+ * until the OS TCP timeout fires (minutes), stalling BullMQ workers
+ * and API request handlers.
+ */
+async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), GATEWAY_TIMEOUT_MS)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function khaltiInitiate(bookingId: string, amountPaisa: number) {
-  const res = await fetch('https://a.khalti.com/api/v2/epayment/initiate/', {
+  const res = await fetchWithTimeout('https://a.khalti.com/api/v2/epayment/initiate/', {
     method: 'POST',
     headers: {
       Authorization: `Key ${ENV['KHALTI_SECRET_KEY']}`,
@@ -55,9 +74,10 @@ async function khaltiInitiate(bookingId: string, amountPaisa: number) {
 }
 
 async function khaltiVerify(pidx: string): Promise<GatewayVerification> {
-  const res = await fetch(`https://a.khalti.com/api/v2/epayment/lookup/?pidx=${pidx}`, {
-    headers: { Authorization: `Key ${ENV['KHALTI_SECRET_KEY']}` },
-  })
+  const res = await fetchWithTimeout(
+    `https://a.khalti.com/api/v2/epayment/lookup/?pidx=${pidx}`,
+    { headers: { Authorization: `Key ${ENV['KHALTI_SECRET_KEY']}` } },
+  )
   if (!res.ok) throw new Error(`Khalti lookup failed: ${res.status}`)
   const data = (await res.json()) as { status: string; total_amount: number; transaction_id: string }
   return {
@@ -110,7 +130,7 @@ async function esewaVerify(encodedData: string): Promise<GatewayVerification> {
   const expected = esewaSign(`${decoded.total_amount},${decoded.transaction_uuid},${decoded.product_code}`)
   if (expected !== decoded.signature) throw new ConflictException('eSewa HMAC mismatch — tampered payment')
 
-  const statusRes = await fetch(
+  const statusRes = await fetchWithTimeout(
     `https://epay.esewa.com.np/api/epay/transaction/status/?product_code=${decoded.product_code}&total_amount=${decoded.total_amount}&transaction_uuid=${decoded.transaction_uuid}`,
   )
   const status = (await statusRes.json()) as { status: string }

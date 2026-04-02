@@ -220,16 +220,21 @@ export class BookingService {
       select: { email: true, name: true },
     })
 
-    await this.notifQueue.add('booking-confirmed', {
-      type: 'BOOKING_CONFIRMED', userId: booking.player_id, data: { bookingId },
-    })
-    await this.emailQueue.add('booking-confirmation', {
-      type: 'booking-confirmation',
-      to: player?.email ?? '',
-      name: player?.name ?? '',
-      data: { bookingId },
-    })
-    await this.analyticsQueue.add('booking-event', { type: 'confirmed', bookingId })
+    await this.notifQueue.add(
+      'booking-confirmed',
+      { type: 'BOOKING_CONFIRMED', userId: booking.player_id, data: { bookingId } },
+      { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+    )
+    await this.emailQueue.add(
+      'booking-confirmation',
+      { type: 'booking-confirmation', to: player?.email ?? '', name: player?.name ?? '', data: { bookingId } },
+      { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+    )
+    await this.analyticsQueue.add(
+      'booking-event',
+      { type: 'confirmed', bookingId },
+      { attempts: 2, backoff: { type: 'exponential', delay: 3_000 }, removeOnComplete: 50, removeOnFail: 100 },
+    )
 
     return result
   }
@@ -337,7 +342,7 @@ export class BookingService {
       await this.refundQueue.add(
         'process-refund',
         { bookingId, refundAmount },
-        { attempts: 5, backoff: { type: 'exponential', delay: 10_000 } },
+        { attempts: 5, backoff: { type: 'exponential', delay: 10_000 }, removeOnComplete: 100, removeOnFail: 500 },
       )
     }
 
