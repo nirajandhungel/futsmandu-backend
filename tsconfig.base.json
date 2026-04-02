@@ -10,11 +10,13 @@
       "ES2022"
     ],
     // ─── Path Aliases (monorepo workspace links) ───────────────────────────────
-    "baseUrl": ".",
     "paths": {
-      "@futsmandu/*": [
-        "packages/*/src"
-      ]
+      "@futsmandu/auth": ["./packages/auth/src"],
+      "@futsmandu/database": ["./packages/database/src"],
+      "@futsmandu/logger": ["./packages/logger/src"],
+      "@futsmandu/redis": ["./packages/redis/src"],
+      "@futsmandu/types": ["./packages/types/src"],
+      "@futsmandu/utils": ["./packages/utils/src"]
     },
     // ─── Type Safety ──────────────────────────────────────────────────────────
     "strict": true,

@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/types" },
+    { "path": "./packages/utils" },
+    { "path": "./packages/logger" },
+    { "path": "./packages/redis" },
+    { "path": "./packages/database" },
+    { "path": "./packages/auth" }
+  ]
+}
+
