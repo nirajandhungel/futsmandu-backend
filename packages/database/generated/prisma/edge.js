@@ -36,11 +36,11 @@ exports.Prisma = Prisma
 exports.$Enums = {}
 
 /**
- * Prisma Client JS version: 6.19.2
+ * Prisma Client JS version: 6.19.3
  * Query Engine version: c2990dca591cba766e3b7ef5d9e8a84796e47ab7
  */
 Prisma.prismaVersion = {
-  client: "6.19.2",
+  client: "6.19.3",
   engine: "c2990dca591cba766e3b7ef5d9e8a84796e47ab7"
 }
 
@@ -511,7 +511,7 @@ const config = {
       "value": "prisma-client-js"
     },
     "output": {
-      "value": "/home/subash/Desktop/futsmandu-backend/packages/database/generated/prisma",
+      "value": "/home/subash/Desktop/futsmandu-backend (3)/packages/database/generated/prisma",
       "fromEnvVar": null
     },
     "config": {
@@ -525,14 +525,14 @@ const config = {
       }
     ],
     "previewFeatures": [],
-    "sourceFilePath": "/home/subash/Desktop/futsmandu-backend/packages/database/prisma/schema.prisma",
+    "sourceFilePath": "/home/subash/Desktop/futsmandu-backend (3)/packages/database/prisma/schema.prisma",
     "isCustomOutput": true
   },
   "relativeEnvPaths": {
     "rootEnvPath": null
   },
   "relativePath": "../../prisma",
-  "clientVersion": "6.19.2",
+  "clientVersion": "6.19.3",
   "engineVersion": "c2990dca591cba766e3b7ef5d9e8a84796e47ab7",
   "datasourceNames": [
     "db"
