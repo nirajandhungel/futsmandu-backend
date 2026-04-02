@@ -25,16 +25,25 @@ export class OwnerSmsProcessor extends WorkerHost {
       return
     }
 
-    const res = await fetch('https://api.sparrowsms.com/v2/sms/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token,
-        from: 'Futsmandu',
-        to:   phone,
-        text: message.slice(0, 160), // SMS 160 char limit
-      }),
-    })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10_000)
+
+    let res: Response
+    try {
+      res = await fetch('https://api.sparrowsms.com/v2/sms/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          from: 'Futsmandu',
+          to:   phone,
+          text: message.slice(0, 160),
+        }),
+        signal: controller.signal,
+      })
+    } finally {
+      clearTimeout(timer)
+    }
 
     if (!res.ok) {
       throw new Error(`Sparrow SMS failed: ${res.status} ${await res.text()}`)
