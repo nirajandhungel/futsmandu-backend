@@ -16,6 +16,7 @@ coverage/
 
 # Logs
 *.log
+*.dev.md
 
 # OS files
 .DS_Store
@@ -28,6 +29,9 @@ coverage/
 # Generated files
 generated/
 prisma/generated/
+
+generated/prisma/
+packages/database/generated
 
 # Databases / persistence
 redis-data/
