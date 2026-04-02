@@ -3,7 +3,7 @@
 # No Sharp (no image uploads), no multipart, minimal image size.
 # Extra security: read-only filesystem in production, no shell.
 
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 # No python/make/g++ needed — no native modules in admin-api
 WORKDIR /app
@@ -36,18 +36,19 @@ RUN npx prisma generate --schema=packages/database/prisma/schema.prisma
 COPY packages/ ./packages/
 COPY apps/admin-api/ ./apps/admin-api/
 
-RUN npm run build --workspace=packages/types    || true
-RUN npm run build --workspace=packages/logger   || true
-RUN npm run build --workspace=packages/redis    || true
-RUN npm run build --workspace=packages/database || true
-RUN npm run build --workspace=packages/auth     || true
-RUN npm run build --workspace=packages/utils    || true
+# No || true — build failures must be loud.
+RUN npm run build --workspace=packages/types
+RUN npm run build --workspace=packages/logger
+RUN npm run build --workspace=packages/redis
+RUN npm run build --workspace=packages/database
+RUN npm run build --workspace=packages/auth
+RUN npm run build --workspace=packages/utils
 RUN npm run build --workspace=apps/admin-api
 
 RUN npm prune --production
 
 # ── Production image ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS production
+FROM node:22-alpine AS production
 
 # No native build tools needed in production
 RUN apk add --no-cache wget
@@ -55,12 +56,12 @@ RUN addgroup -g 1001 -S nodejs && adduser -S admin-api -u 1001
 
 WORKDIR /app
 
-COPY --from=builder --chown=admin-api:nodejs /app/dist                         ./dist
-COPY --from=builder --chown=admin-api:nodejs /app/node_modules                 ./node_modules
-COPY --from=builder --chown=admin-api:nodejs /app/packages                     ./packages
-COPY --from=builder --chown=admin-api:nodejs /app/packages/database/prisma     ./packages/database/prisma
-COPY --from=builder --chown=admin-api:nodejs /app/packages/database/generated  ./packages/database/generated
-COPY --from=builder --chown=admin-api:nodejs /app/package.json                 ./
+# Copy compiled output and production node_modules from builder.
+# packages/ already contains packages/database/generated — no need to copy it twice.
+COPY --from=builder --chown=admin-api:nodejs /app/dist         ./dist
+COPY --from=builder --chown=admin-api:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=admin-api:nodejs /app/packages     ./packages
+COPY --from=builder --chown=admin-api:nodejs /app/package.json ./
 
 USER admin-api
 
