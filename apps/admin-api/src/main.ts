@@ -18,43 +18,28 @@ import fastifyCookie from '@fastify/cookie'
 import { AppModule } from './app.module.js'
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js'
 import { ResponseInterceptor } from './common/interceptors/response.interceptor.js'
-import { ENV } from '@futsmandu/utils'
+import { ENV, validateENV } from '@futsmandu/utils'
+import { markRedisShuttingDown } from '@futsmandu/redis'
 import { EventEmitter } from 'events'
 
 // Raise the default max-listeners ceiling before any module registers listeners.
 EventEmitter.defaultMaxListeners = 20
 
-const REQUIRED_ENV: string[] = [
-  'DATABASE_URL',
-  'DIRECT_DATABASE_URL',
-  'ADMIN_JWT_SECRET',
-]
-
 function validateEnv(): void {
-  const missing = REQUIRED_ENV.filter(k => !process.env[k])
-  if (missing.length > 0) {
-    console.error(
-      `[Bootstrap] FATAL: Missing required environment variables:\n  ${missing.join('\n  ')}\n` +
-      'Copy .env.example → .env.admin and fill in all values.',
-    )
-    process.exit(1)
-  }
+  // Delegate all common + Redis checks to the centralized validator.
+  // Pass admin-specific required keys as extras.
+  validateENV(['ADMIN_JWT_SECRET'])
 
-  const hasRedis = Boolean(process.env['REDIS_URL'] || process.env['UPSTASH_REDIS_IOREDIS_URL'])
-  if (!hasRedis) {
-    console.error('[Bootstrap] FATAL: Missing REDIS_URL (preferred) or UPSTASH_REDIS_IOREDIS_URL')
-    process.exit(1)
-  }
-  const minSecretLength = ENV['NODE_ENV'] === 'production' ? 64 : 32
-  if ((ENV['ADMIN_JWT_SECRET']?.length ?? 0) < minSecretLength) {
+  const minSecretLength = ENV.NODE_ENV === 'production' ? 64 : 32
+  if ((ENV.ADMIN_JWT_SECRET?.length ?? 0) < minSecretLength) {
     console.error(
-      `[Bootstrap] FATAL: ADMIN_JWT_SECRET must be at least ${minSecretLength} characters` +
-      (ENV['NODE_ENV'] === 'production' ? ' (use openssl rand -base64 64)' : ''),
+      `[ENV] FATAL — ADMIN_JWT_SECRET must be at least ${minSecretLength} characters` +
+      (ENV.NODE_ENV === 'production' ? ' (use: openssl rand -base64 64)' : ''),
     )
     process.exit(1)
   }
-  if (ENV['NODE_ENV'] === 'production' && !ENV['ADMIN_ALLOWED_IPS']) {
-    console.error('[Bootstrap] FATAL: ADMIN_ALLOWED_IPS must be set in production')
+  if (ENV.NODE_ENV === 'production' && !ENV.ADMIN_ALLOWED_IPS) {
+    console.error('[ENV] FATAL — ADMIN_ALLOWED_IPS must be set in production')
     process.exit(1)
   }
 }
@@ -144,6 +129,7 @@ async function bootstrap(): Promise<void> {
   for (const signal of signals) {
     process.on(signal, async () => {
       logger.log(`${signal} received — shutting down admin-api`)
+      markRedisShuttingDown()
       await app.close()
       process.exit(0)
     })

@@ -3,7 +3,7 @@ import { Module } from '@nestjs/common'
 import { ConfigModule } from '@nestjs/config'
 import { PrismaModule } from '@futsmandu/database'
 import { AdminEmailProcessor } from './processors/email.processor.js'
-import { QueuesModule } from '../queues.module.js'
+import { QueuesModule } from '@futsmandu/queues'
 
 @Module({
   imports: [

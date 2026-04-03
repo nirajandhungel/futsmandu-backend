@@ -11,6 +11,7 @@ import { JwtModule } from '@nestjs/jwt'
 import { ThrottlerModule } from '@nestjs/throttler'
 
 import { PrismaModule } from '@futsmandu/database'
+import { QueuesModule } from '@futsmandu/queues'
 
 import { IpWhitelistMiddleware }   from './common/middleware/ip-whitelist.middleware.js'
 import { AdminAuthModule }         from './modules/admin-auth/admin-auth.module.js'
@@ -21,7 +22,7 @@ import { AdminModerationModule }   from './modules/admin-moderation/admin-modera
 import { AdminAnalyticsModule }    from './modules/analytics/analytics.module.js'
 import { AdminHealthModule }       from './modules/health/health.module.js'
 import { ENV } from '@futsmandu/utils'
-import { QueuesModule } from './queues.module.js'
+
 
 @Module({
   imports: [
