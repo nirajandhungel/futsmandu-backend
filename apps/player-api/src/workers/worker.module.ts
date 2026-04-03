@@ -17,7 +17,7 @@ import { SmsProcessor } from './processors/sms.processor.js'
 import { SchedulerService } from './scheduler.service.js'
 import { BookingModule } from '../modules/booking/booking.module.js'
 import { PaymentModule } from '../modules/payment/payment.module.js'
-import { QueuesModule } from '../queues.module.js'
+import { QueuesModule } from '@futsmandu/queues'
 
 @Module({
   imports: [
