@@ -1,0 +1,15 @@
+{
+  "name": "@futsmandu/queues",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build --force"
+  },
+  "dependencies": {
+    "@futsmandu/redis": "*",
+    "@nestjs/bullmq": "^11.0.2",
+    "@nestjs/common": "^11.0.11"
+  }
+}
