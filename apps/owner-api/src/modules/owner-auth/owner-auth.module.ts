@@ -4,7 +4,7 @@ import { OwnerAuthController } from './owner-auth.controller.js'
 import { OwnerAuthService } from './owner-auth.service.js'
 import { OwnerJwtGuard } from '../../common/guards/owner-jwt.guard.js'
 import { ENV } from '@futsmandu/utils'
-import { QueuesModule } from '../../queues.module.js'
+import { QueuesModule } from '@futsmandu/queues'
 
 @Module({
   imports: [
