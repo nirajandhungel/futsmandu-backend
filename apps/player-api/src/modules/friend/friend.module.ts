@@ -2,7 +2,7 @@
 import { Module } from '@nestjs/common'
 import { FriendService } from './friend.service.js'
 import { FriendController } from './friend.controller.js'
-import { QueuesModule } from '../../queues.module.js'
+import { QueuesModule } from '@futsmandu/queues'
 
 @Module({
   imports: [QueuesModule],
