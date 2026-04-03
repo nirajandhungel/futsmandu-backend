@@ -8,7 +8,7 @@ import { OwnerNotificationProcessor } from './processors/notification.processor.
 import { OwnerEmailProcessor }        from './processors/email.processor.js'
 import { OwnerSmsProcessor }          from './processors/sms.processor.js'
 import { ImageProcessingProcessor }   from './processors/image-processing.processor.js'
-import { QueuesModule } from '../queues.module.js'
+import { QueuesModule } from '@futsmandu/queues'
 
 @Module({
   imports: [

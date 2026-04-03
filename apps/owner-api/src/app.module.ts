@@ -11,6 +11,7 @@ import { ThrottlerModule } from '@nestjs/throttler'
 
 import { PrismaModule } from '@futsmandu/database'
 import { RedisModule } from '@futsmandu/redis'
+import { QueuesModule } from '@futsmandu/queues'
 
 import { OwnerAuthModule }       from './modules/owner-auth/owner-auth.module.js'
 import { VenueManagementModule } from './modules/venue-management/venue-management.module.js'
@@ -23,7 +24,6 @@ import { MediaModule }           from './modules/media/media.module.js'
 import { NotificationsModule }   from './modules/notifications/notifications.module.js'
 import { HealthModule }          from './modules/health/health.module.js'
 import { ENV } from '@futsmandu/utils'
-import { QueuesModule } from './queues.module.js'
 
 @Module({
   imports: [

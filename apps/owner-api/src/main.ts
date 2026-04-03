@@ -18,46 +18,35 @@ import fastifyMultipart from '@fastify/multipart'
 import { AppModule } from './app.module.js'
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js'
 import { ResponseInterceptor } from './common/interceptors/response.interceptor.js'
-import { ENV } from '@futsmandu/utils'
+import { ENV, validateENV } from '@futsmandu/utils'
+import { markRedisShuttingDown } from '@futsmandu/redis'
 import { EventEmitter } from 'events'
 
 // Raise the default max-listeners ceiling before any module registers listeners.
 EventEmitter.defaultMaxListeners = 20
 
-const REQUIRED_ENV: string[] = [
-  'DATABASE_URL',
-  'DIRECT_DATABASE_URL',
-  'OWNER_JWT_SECRET',
-  'CF_ACCOUNT_ID',
-  'R2_ACCESS_KEY_ID',
-  'R2_SECRET_ACCESS_KEY',
-  'R2_BUCKET_NAME',
-  'R2_CDN_BASE_URL',
-]
-
 function validateEnv(): void {
-  const missing = REQUIRED_ENV.filter(k => !process.env[k])
-  if (missing.length > 0) {
-    console.error(
-      `[Bootstrap] FATAL: Missing required environment variables:\n  ${missing.join('\n  ')}\n` +
-      'Copy .env.example → .env.owner and fill in all values before starting.',
-    )
+  // Delegates DATABASE_URL, DIRECT_DATABASE_URL, UPSTASH_REDIS_IOREDIS_URL
+  // (+ rediss:// format check) to the centralized validator.
+  validateENV([
+    'OWNER_JWT_SECRET',
+    'CF_ACCOUNT_ID',
+    'R2_ACCESS_KEY_ID',
+    'R2_SECRET_ACCESS_KEY',
+    'R2_BUCKET_NAME',
+    'R2_CDN_BASE_URL',
+  ])
+
+  if ((ENV.OWNER_JWT_SECRET?.length ?? 0) < 32) {
+    console.error('[ENV] FATAL — OWNER_JWT_SECRET must be at least 32 characters')
     process.exit(1)
   }
 
-  const hasRedis = Boolean(process.env['REDIS_URL'] || process.env['UPSTASH_REDIS_IOREDIS_URL'])
-  if (!hasRedis) {
-    console.error('[Bootstrap] FATAL: Missing REDIS_URL (preferred) or UPSTASH_REDIS_IOREDIS_URL')
-    process.exit(1)
-  }
-  if ((ENV['OWNER_JWT_SECRET']?.length ?? 0) < 32) {
-    console.error('[Bootstrap] FATAL: OWNER_JWT_SECRET must be at least 32 characters')
-    process.exit(1)
-  }
-  if (ENV['FIREBASE_SERVICE_ACCOUNT']) {
-    const val = ENV['FIREBASE_SERVICE_ACCOUNT']
+  // Firebase is optional — warn rather than exit.
+  if (ENV.FIREBASE_SERVICE_ACCOUNT) {
+    const val = ENV.FIREBASE_SERVICE_ACCOUNT
     if (!val.startsWith('{') && !val.endsWith('.json')) {
-      console.warn('[Bootstrap] WARNING: FIREBASE_SERVICE_ACCOUNT is neither a JSON string nor a .json file path. FCM may fail to initialize.')
+      console.warn('[Bootstrap] WARNING: FIREBASE_SERVICE_ACCOUNT is neither a JSON string nor a .json path — FCM may fail.')
     }
   } else {
     console.warn('[Bootstrap] WARNING: FIREBASE_SERVICE_ACCOUNT not set — owner FCM push disabled')
@@ -164,6 +153,7 @@ async function bootstrap(): Promise<void> {
   for (const signal of signals) {
     process.on(signal, async () => {
       logger.log(`${signal} received — shutting down owner-api`)
+      markRedisShuttingDown()
       await app.close()
       process.exit(0)
     })

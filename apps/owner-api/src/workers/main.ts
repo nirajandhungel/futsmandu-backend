@@ -4,6 +4,7 @@
 import { NestFactory } from '@nestjs/core'
 import { Logger } from '@nestjs/common'
 import { OwnerWorkerModule } from './worker.module.js'
+import { RedisService, markRedisShuttingDown } from '@futsmandu/redis'
 import { ENV } from '@futsmandu/utils'
 import { EventEmitter } from 'events'
 
@@ -17,6 +18,14 @@ async function bootstrap() {
       : ['log', 'debug', 'warn', 'error'],
   })
 
+  // ── Wait for Redis before BullMQ registers processors ──────────────────────
+  // Prevents "Stream isn't writeable" cascade caused by BullMQ issuing
+  // commands before the TLS handshake completes.
+  const redis = app.get(RedisService)
+  await redis.waitForReady()
+
+  await app.init()
+
   const logger = new Logger('OwnerWorker')
   logger.log('🔧 Owner worker started — processing: notifications, owner-emails, sms, image-processing')
 
@@ -24,6 +33,7 @@ async function bootstrap() {
   for (const signal of signals) {
     process.on(signal, async () => {
       logger.log(`${signal} received — draining owner worker queues`)
+      markRedisShuttingDown()
       await app.close()
       process.exit(0)
     })
