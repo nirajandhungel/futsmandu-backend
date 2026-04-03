@@ -6,7 +6,8 @@
     { "path": "./packages/logger" },
     { "path": "./packages/redis" },
     { "path": "./packages/database" },
-    { "path": "./packages/auth" }
+    { "path": "./packages/auth" },
+    { "path": "./packages/queues" }
   ]
 }
 

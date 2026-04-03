@@ -16,7 +16,8 @@
       "@futsmandu/logger": ["./packages/logger/src"],
       "@futsmandu/redis": ["./packages/redis/src"],
       "@futsmandu/types": ["./packages/types/src"],
-      "@futsmandu/utils": ["./packages/utils/src"]
+      "@futsmandu/utils": ["./packages/utils/src"],
+      "@futsmandu/queues": ["./packages/queues/src"]
     },
     // ─── Type Safety ──────────────────────────────────────────────────────────
     "strict": true,
