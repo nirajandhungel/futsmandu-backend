@@ -3,7 +3,7 @@ import { AdminVenuesController } from './admin-venues.controller.js'
 import { AdminVenuesService } from './admin-venues.service.js'
 import { AdminAuthModule } from '../admin-auth/admin-auth.module.js'
 import { RolesGuard } from '../../common/guards/roles.guard.js'
-import { QueuesModule } from '../../queues.module.js'
+import { QueuesModule } from '@futsmandu/queues'
 
 @Module({
   imports: [
