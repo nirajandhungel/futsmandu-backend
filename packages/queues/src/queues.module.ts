@@ -25,7 +25,16 @@ import {
       inject: [RedisService],
       useFactory: (redis: RedisService) => ({
         // Reuse the already-created ioredis instance so BullMQ doesn't create sockets.
-        connection: redis.bullClient,
+        connection: redis.bullClient as any,
+        defaultJobOptions: {
+          removeOnComplete: 1000,
+          removeOnFail: 5000,
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 1000,
+          },
+        },
       }),
     }),
     BullModule.registerQueue(
