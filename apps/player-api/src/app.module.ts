@@ -15,8 +15,7 @@ import { ThrottlerModule } from '@nestjs/throttler'
 
 import { PrismaModule } from '@futsmandu/database'
 import { RedisModule } from '@futsmandu/redis'
-
-import { QueuesModule }      from './queues.module.js'
+import { QueuesModule } from '@futsmandu/queues'
 import { AuthModule }        from './modules/auth/auth.module.js'
 import { VenueModule }       from './modules/venue/venue.module.js'
 import { BookingModule }     from './modules/booking/booking.module.js'

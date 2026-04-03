@@ -21,54 +21,31 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js'
 import { ResponseInterceptor } from './common/interceptors/response.interceptor.js'
 import { SanitizePipe } from './common/pipes/sanitize.pipe.js'
 import { JwtAuthGuard } from '@futsmandu/auth'
-import { ENV } from '@futsmandu/utils'
+import { ENV, validateENV } from '@futsmandu/utils'
+import { markRedisShuttingDown } from '@futsmandu/redis'
 import { EventEmitter } from 'events'
 
 // Raise the default max-listeners ceiling before any module registers listeners.
 EventEmitter.defaultMaxListeners = 20
 
-// ── L-4: Startup env validation ───────────────────────────────────────────────
-// Fail immediately with a clear message rather than crashing with a cryptic error
-// at first request when a secret is undefined.
-const REQUIRED_ENV: string[] = [
-  'DATABASE_URL',
-  'DIRECT_DATABASE_URL',
-  'PLAYER_JWT_SECRET',
-  'KHALTI_SECRET_KEY',
-  'ESEWA_SECRET_KEY',
-  'ESEWA_PRODUCT_CODE',
-  'APP_URL',
-]
-
+// ── Startup env validation ────────────────────────────────────────────────────
+// Fail immediately with a clear message rather than crashing with a cryptic
+// error at first request when a secret is undefined.
 function validateEnv(): void {
-  const missing = REQUIRED_ENV.filter(k => !process.env[k])
-  if (missing.length > 0) {
-    console.error(
-      `[Bootstrap] FATAL: Missing required environment variables:\n  ${missing.join('\n  ')}\n` +
-      'Copy .env.example → .env and fill in all values before starting.',
-    )
+  // Delegates DATABASE_URL, DIRECT_DATABASE_URL, UPSTASH_REDIS_IOREDIS_URL
+  // (+ rediss:// format check) to the centralized validator.
+  validateENV(['PLAYER_JWT_SECRET', 'KHALTI_SECRET_KEY', 'ESEWA_SECRET_KEY', 'ESEWA_PRODUCT_CODE', 'APP_URL'])
+
+  if ((ENV.PLAYER_JWT_SECRET?.length ?? 0) < 32) {
+    console.error('[ENV] FATAL — PLAYER_JWT_SECRET must be at least 32 characters')
     process.exit(1)
   }
 
-  // Redis can be either:
-  // - local/docker/managed: REDIS_URL=redis://host:6379
-  // - legacy Upstash: UPSTASH_REDIS_IOREDIS_URL=rediss://...:6379
-  const hasRedis = Boolean(process.env['REDIS_URL'] || process.env['UPSTASH_REDIS_IOREDIS_URL'])
-  if (!hasRedis) {
-    console.error('[Bootstrap] FATAL: Missing REDIS_URL (preferred) or UPSTASH_REDIS_IOREDIS_URL')
-    process.exit(1)
-  }
-
-  if ((ENV['PLAYER_JWT_SECRET']?.length ?? 0) < 32) {
-    console.error('[Bootstrap] FATAL: PLAYER_JWT_SECRET must be at least 32 characters')
-    process.exit(1)
-  }
-
-  // M-3: Firebase must be a valid JSON string when present
-  if (ENV['FIREBASE_SERVICE_ACCOUNT']) {
-    const val = ENV['FIREBASE_SERVICE_ACCOUNT']
+  // Firebase is optional — warn rather than exit.
+  if (ENV.FIREBASE_SERVICE_ACCOUNT) {
+    const val = ENV.FIREBASE_SERVICE_ACCOUNT
     if (!val.startsWith('{') && !val.endsWith('.json')) {
-      console.warn('[Bootstrap] WARNING: FIREBASE_SERVICE_ACCOUNT is neither a JSON string nor a .json file path. FCM may fail to initialize.')
+      console.warn('[Bootstrap] WARNING: FIREBASE_SERVICE_ACCOUNT is neither a JSON string nor a .json path — FCM may fail.')
     }
   } else {
     console.warn('[Bootstrap] WARNING: FIREBASE_SERVICE_ACCOUNT not set — FCM push notifications disabled')
@@ -159,6 +136,7 @@ async function bootstrap(): Promise<void> {
   for (const signal of signals) {
     process.on(signal, async () => {
       logger.log(`${signal} received — shutting down`)
+      markRedisShuttingDown()
       await app.close()
       process.exit(0)
     })
