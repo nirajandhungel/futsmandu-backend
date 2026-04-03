@@ -5,7 +5,7 @@ import { JwtStrategy } from '@futsmandu/auth'
 import { AuthService } from './auth.service.js'
 import { AuthController } from './auth.controller.js'
 import { ENV } from '@futsmandu/utils'
-import { QueuesModule } from '../../queues.module.js'
+import { QueuesModule } from '@futsmandu/queues'
 
 @Module({
   imports: [
