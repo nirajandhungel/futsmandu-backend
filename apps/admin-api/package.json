@@ -8,7 +8,7 @@
     "start": "node ../../dist/apps/admin-api/main.js",
     "start:worker": "node ../../dist/apps/admin-api/workers/main.js",
     "dev": "nest start --watch",
-    "dev:worker": "TS_NODE_TRANSPILE_ONLY=true node --loader ts-node/esm -r tsconfig-paths/register src/workers/main.ts"
+    "dev:worker": "tsx src/workers/main.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.782.0",
@@ -19,6 +19,7 @@
     "@futsmandu/auth": "*",
     "@futsmandu/database": "*",
     "@futsmandu/logger": "*",
+    "@futsmandu/queues": "*",
     "@futsmandu/redis": "*",
     "@futsmandu/types": "*",
     "@futsmandu/utils": "*",
