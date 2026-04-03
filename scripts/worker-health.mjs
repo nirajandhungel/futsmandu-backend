@@ -25,10 +25,10 @@ function parseRedisUrl(rawUrl) {
   };
 }
 
-const redisUrl = process.env.REDIS_URL;
+const redisUrl = process.env.UPSTASH_REDIS_IOREDIS_URL || process.env.REDIS_URL;
 
 if (!redisUrl) {
-  console.error('[worker-health] REDIS_URL is not set');
+  console.error('[worker-health] UPSTASH_REDIS_IOREDIS_URL is not set');
   process.exit(1);
 }
 

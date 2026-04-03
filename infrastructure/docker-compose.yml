@@ -13,7 +13,7 @@
 #
 # Prerequisites:
 #   Copy .env.example → .env and fill all values before running.
-#   REDIS_PASSWORD and REDIS_URL must be set — no defaults are provided here
+#   UPSTASH_REDIS_IOREDIS_URL must be set — no defaults are provided here
 #   to prevent secrets from being embedded in committed files.
 #
 # Scale player-api only:
@@ -26,20 +26,13 @@ networks:
       config:
         - subnet: 172.20.0.0/16
 
-volumes:
-  redis-data:
+
 
 x-common-env: &common-env
   NODE_ENV:                  ${NODE_ENV:?NODE_ENV is required}
   DATABASE_URL:              ${DATABASE_URL:?DATABASE_URL is required}
   DIRECT_DATABASE_URL:       ${DIRECT_DATABASE_URL:?DIRECT_DATABASE_URL is required}
-  # REDIS_URL must be set in .env.
-  # Local Docker value:  redis://:<password>@redis:6379
-  # Upstash production:  rediss://<user>:<token>@<host>:6380
-  REDIS_URL:                 ${REDIS_URL:?REDIS_URL is required}
-  UPSTASH_REDIS_REST_URL:    ${UPSTASH_REDIS_REST_URL:?UPSTASH_REDIS_REST_URL is required (set empty if unused)}
-  UPSTASH_REDIS_REST_TOKEN:  ${UPSTASH_REDIS_REST_TOKEN:?UPSTASH_REDIS_REST_TOKEN is required (set empty if unused)}
-  UPSTASH_REDIS_IOREDIS_URL: ${UPSTASH_REDIS_IOREDIS_URL:?UPSTASH_REDIS_IOREDIS_URL is required (set empty if unused)}
+  UPSTASH_REDIS_IOREDIS_URL: ${UPSTASH_REDIS_IOREDIS_URL:?UPSTASH_REDIS_IOREDIS_URL is required}
   SENTRY_DSN:                ${SENTRY_DSN:?SENTRY_DSN is required (set empty if unused)}
   APP_URL:                   ${APP_URL:?APP_URL is required}
   DB_POOL_SIZE:              ${DB_POOL_SIZE:?DB_POOL_SIZE is required}
@@ -119,9 +112,6 @@ services:
     environment:
       <<: *player-env
       PLAYER_API_PORT: 3001
-    depends_on:
-      redis:
-        condition: service_healthy
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -148,9 +138,6 @@ services:
     environment:
       <<: *player-env
       DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:?WORKER_DB_POOL_SIZE is required}
-    depends_on:
-      redis:
-        condition: service_healthy
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -174,9 +161,6 @@ services:
       <<: *owner-env
       OWNER_API_PORT: 3002
       DB_POOL_SIZE:   ${OWNER_DB_POOL_SIZE:?OWNER_DB_POOL_SIZE is required}
-    depends_on:
-      redis:
-        condition: service_healthy
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -204,9 +188,6 @@ services:
     environment:
       <<: *owner-env
       DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:?WORKER_DB_POOL_SIZE is required}
-    depends_on:
-      redis:
-        condition: service_healthy
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -230,9 +211,6 @@ services:
       <<: *admin-env
       ADMIN_API_PORT: 3003
       DB_POOL_SIZE:   ${ADMIN_DB_POOL_SIZE:?ADMIN_DB_POOL_SIZE is required}
-    depends_on:
-      redis:
-        condition: service_healthy
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -259,9 +237,6 @@ services:
     environment:
       <<: *admin-env
       DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:?WORKER_DB_POOL_SIZE is required}
-    depends_on:
-      redis:
-        condition: service_healthy
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -269,37 +244,6 @@ services:
       resources:
         limits:       { cpus: "0.25", memory: 128M }
         reservations: { cpus: "0.05", memory: 64M }
-    logging:
-      driver: json-file
-      options: { max-size: "5m", max-file: "2" }
-
-  # ── Redis (dev only — use Upstash in production) ──────────────────────────
-  redis:
-    image: redis:7.2-alpine
-    container_name: futsmandu-redis
-    command: >
-      redis-server
-      --appendonly yes
-      --appendfsync everysec
-      --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
-      --loglevel warning
-      --dir /data
-      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-    volumes:
-      - redis-data:/data
-    networks:
-      - futsmandu-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-    deploy:
-      resources:
-        limits: { memory: 512M }
     logging:
       driver: json-file
       options: { max-size: "5m", max-file: "2" }
