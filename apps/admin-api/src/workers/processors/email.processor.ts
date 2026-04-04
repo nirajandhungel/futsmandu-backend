@@ -2,7 +2,7 @@
 // Admin email processor — sends verification status emails to owners.
 // Triggered when admin approves or rejects a venue/owner verification.
 import { Processor, WorkerHost } from '@nestjs/bullmq'
-import { Logger } from '@nestjs/common'
+import { Logger, Inject } from '@nestjs/common'
 import { Job } from 'bullmq'
 import { PrismaService } from '@futsmandu/database'
 import { ENV } from '@futsmandu/utils'
@@ -18,7 +18,7 @@ interface AdminEmailJobData {
 export class AdminEmailProcessor extends WorkerHost {
   private readonly logger = new Logger(AdminEmailProcessor.name)
 
-  constructor(private readonly prisma: PrismaService) {
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {
     super()
   }
 
