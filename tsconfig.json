@@ -1,4 +1,8 @@
 {
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true
+  },
   "files": [],
   "references": [
     { "path": "./packages/types" },
@@ -7,7 +11,10 @@
     { "path": "./packages/redis" },
     { "path": "./packages/database" },
     { "path": "./packages/auth" },
-    { "path": "./packages/queues" }
+    { "path": "./packages/queues" },
+    { "path": "./apps/player-api" },
+    { "path": "./apps/owner-api" },
+    { "path": "./apps/admin-api" }
   ]
 }
 
