@@ -8,7 +8,7 @@
 // M-3: FIREBASE_SERVICE_ACCOUNT validated at module init — throws immediately if missing.
 
 import { Processor, InjectQueue, WorkerHost } from '@nestjs/bullmq'
-import { Logger } from '@nestjs/common'
+import { Logger, Inject } from '@nestjs/common'
 import { Job, Queue } from 'bullmq'
 import { PrismaService } from '@futsmandu/database'
 import type { Prisma } from '@futsmandu/database'
@@ -83,7 +83,7 @@ export class NotificationProcessor extends WorkerHost {
   private readonly logger = new Logger(NotificationProcessor.name)
 
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
     @InjectQueue('sms') private readonly smsQueue: Queue,
   ) {
     super()
