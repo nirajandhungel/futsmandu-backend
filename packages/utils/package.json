@@ -8,6 +8,7 @@
     "build": "tsc --build --force"
   },
   "dependencies": {
-    "@futsmandu/types": "*"
+    "dotenv": "^16.4.0",
+    "@futsmandu/types": "workspace:*"
   }
 }
