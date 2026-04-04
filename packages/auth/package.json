@@ -7,16 +7,19 @@
   "scripts": {
     "build": "tsc --build --force"
   },
+  "devDependencies": {
+    "@types/passport-jwt": "^4.0.1"
+  },
   "dependencies": {
     "@nestjs/common": "^11.0.11",
     "@nestjs/core": "^11.0.11",
     "@nestjs/config": "^4.0.2",
     "@nestjs/jwt": "^11.0.0",
     "@nestjs/passport": "^11.0.5",
-    "@futsmandu/redis": "*",
+    "@futsmandu/redis": "workspace:*",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "fastify": "^5.0.0",
-    "@futsmandu/types": "*"
+    "@futsmandu/types": "workspace:*"
   }
 }
