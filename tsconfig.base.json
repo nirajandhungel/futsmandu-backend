@@ -4,6 +4,7 @@
     // Fully converted to ES Modules ("type": "module" in package.json)
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "baseUrl": ".",
     // ─── Compilation Target ───────────────────────────────────────────────────
     "target": "ES2022",
     "lib": [
