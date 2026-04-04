@@ -4,7 +4,7 @@
 // Also sends SMS for high-priority owner alerts (new booking, payment received).
 
 import { Processor, InjectQueue, WorkerHost } from '@nestjs/bullmq'
-import { Logger } from '@nestjs/common'
+import { Logger, Inject } from '@nestjs/common'
 import { Job, Queue } from 'bullmq'
 import { PrismaService, Prisma } from '@futsmandu/database'
 import admin from 'firebase-admin'
@@ -139,7 +139,7 @@ export class OwnerNotificationProcessor extends WorkerHost {
   private readonly logger = new Logger(OwnerNotificationProcessor.name)
 
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
     @InjectQueue('sms') private readonly smsQueue: Queue,
   ) {
     super()
