@@ -3,7 +3,7 @@
 // Independent server-side verification. Idempotent — checks status before processing.
 
 import { Processor, WorkerHost } from '@nestjs/bullmq'
-import { Logger } from '@nestjs/common'
+import { Logger, Inject } from '@nestjs/common'
 import { PrismaService } from '@futsmandu/database'
 import { BookingService } from '../../modules/booking/booking.service.js'
 import { PaymentService } from '../../modules/payment/payment.service.js'
@@ -13,9 +13,9 @@ export class PaymentReconProcessor extends WorkerHost {
   private readonly logger = new Logger(PaymentReconProcessor.name)
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly bookingService: BookingService,
-    private readonly paymentService: PaymentService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(BookingService) private readonly bookingService: BookingService,
+    @Inject(PaymentService) private readonly paymentService: PaymentService,
   ) {
     super()
   }
