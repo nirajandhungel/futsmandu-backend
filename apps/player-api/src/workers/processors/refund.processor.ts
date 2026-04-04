@@ -7,7 +7,7 @@
 // FIX: Added AbortSignal timeout to all external fetch calls (was missing — hung requests blocked worker).
 
 import { Processor, WorkerHost } from '@nestjs/bullmq'
-import { Logger } from '@nestjs/common'
+import { Logger, Inject } from '@nestjs/common'
 import { Job } from 'bullmq'
 import { PrismaService } from '@futsmandu/database'
 import type { RefundJobData } from '@futsmandu/types'
@@ -19,7 +19,7 @@ const GATEWAY_TIMEOUT_MS = 15_000
 @Processor('refunds')
 export class RefundProcessor extends WorkerHost {
   private readonly logger = new Logger(RefundProcessor.name)
-  constructor(private readonly prisma: PrismaService) {
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {
     super()
   }
 
