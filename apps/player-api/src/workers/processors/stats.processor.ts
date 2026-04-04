@@ -4,7 +4,7 @@
 // to silently mis-register processors. Each processor must be its own file.
 
 import { Processor, WorkerHost } from '@nestjs/bullmq'
-import { Logger } from '@nestjs/common'
+import { Logger, Inject } from '@nestjs/common'
 import { Job } from 'bullmq'
 import type { StatsJobData } from '@futsmandu/types'
 import { PrismaService } from '@futsmandu/database'
@@ -12,7 +12,7 @@ import { PrismaService } from '@futsmandu/database'
 @Processor('player-stats')
 export class StatsProcessor extends WorkerHost {
   private readonly logger = new Logger(StatsProcessor.name)
-  constructor(private readonly prisma: PrismaService) {
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {
     super()
   }
 
