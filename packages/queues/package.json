@@ -8,7 +8,7 @@
     "build": "tsc --build --force"
   },
   "dependencies": {
-    "@futsmandu/redis": "*",
+    "@futsmandu/redis": "workspace:*",
     "@nestjs/bullmq": "^11.0.2",
     "@nestjs/common": "^11.0.11"
   }
