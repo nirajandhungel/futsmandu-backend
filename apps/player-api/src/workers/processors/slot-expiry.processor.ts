@@ -3,7 +3,7 @@
 // Catches edge cases where Redis failed to auto-expire a hold.
 
 import { Processor, InjectQueue, WorkerHost } from '@nestjs/bullmq'
-import { Logger } from '@nestjs/common'
+import { Logger, Inject } from '@nestjs/common'
 import { Queue } from 'bullmq'
 import { PrismaService } from '@futsmandu/database'
 import { RedisService } from '@futsmandu/redis'
@@ -14,9 +14,9 @@ export class SlotExpiryProcessor extends WorkerHost {
   private readonly logger = new Logger(SlotExpiryProcessor.name)
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
-    private readonly bookingService: BookingService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(RedisService) private readonly redis: RedisService,
+    @Inject(BookingService) private readonly bookingService: BookingService,
     @InjectQueue('notifications') private readonly notifQueue: Queue,
   ) {
     super()
