@@ -4,22 +4,11 @@
     // Fully converted to ES Modules ("type": "module" in package.json)
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "baseUrl": ".",
     // ─── Compilation Target ───────────────────────────────────────────────────
     "target": "ES2022",
     "lib": [
       "ES2022"
     ],
-    // ─── Path Aliases (monorepo workspace links) ───────────────────────────────
-    "paths": {
-      "@futsmandu/auth": ["./packages/auth/src"],
-      "@futsmandu/database": ["./packages/database/src"],
-      "@futsmandu/logger": ["./packages/logger/src"],
-      "@futsmandu/redis": ["./packages/redis/src"],
-      "@futsmandu/types": ["./packages/types/src"],
-      "@futsmandu/utils": ["./packages/utils/src"],
-      "@futsmandu/queues": ["./packages/queues/src"]
-    },
     // ─── Type Safety ──────────────────────────────────────────────────────────
     "strict": true,
     "noImplicitAny": true,
