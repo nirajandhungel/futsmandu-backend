@@ -2,10 +2,16 @@
   "name": "@futsmandu/auth",
   "version": "1.0.0",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "scripts": {
-    "build": "tsc --build --force"
+    "build": "tsc -b"
   },
   "devDependencies": {
     "@types/passport-jwt": "^4.0.1"
