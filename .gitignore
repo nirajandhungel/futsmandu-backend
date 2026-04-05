@@ -45,3 +45,6 @@ postgres-data/
 .turbo/
 node_modules/.cache/
 
+
+**/seed-admin.ts
+**/apis.rest
