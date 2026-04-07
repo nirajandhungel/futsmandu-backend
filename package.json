@@ -33,14 +33,15 @@
     ]
   },
   "scripts": {
-    "clean": "npx -y rimraf node_modules \"packages/**/dist\" \"apps/**/dist\" \"**/*.tsbuildinfo\" \"**/*.log\"",
-    "clean:all": "pnpm run clean && npx -y rimraf pnpm-lock.yaml && echo 'Deep clean complete.'",
+    "clean": "find . -type d \\( -name 'node_modules' -o -name 'dist' \\) -not -path './.git/*' -exec rm -rf {} + 2>/dev/null; find . \\( -name '*.tsbuildinfo' -o -name '*.log' \\) -not -path './.git/*' -delete 2>/dev/null; echo '✅ Cleaned node_modules, dist, tsbuildinfo, logs'",
+    "clean:deep": "pnpm run clean && npx -y rimraf pnpm-lock.yaml && echo '💣 Deep clean complete — run pnpm install to reinstall.'",
     "setup": "pnpm install && node scripts/validate-env.mjs && pnpm prisma:generate && pnpm prisma:push && pnpm run build && echo '✨ Project Setup Complete. Run pnpm dev:all ✨'",
-    "reset": "pnpm run clean:all && pnpm run setup",
+    "reset": "pnpm run clean:deep && pnpm run setup",
     "bootstrap": "pnpm docker:up && pnpm run setup",
     "build": "pnpm build:packages && pnpm build:apps",
     "build:packages": "pnpm --filter \"./packages/**\" run build",
     "build:apps": "pnpm --filter \"./apps/**\" run build",
+    "db:reset": "pnpm --filter @futsmandu/database exec dotenv -e ../../.env -- prisma migrate reset",
     "prisma:generate": "pnpm --filter @futsmandu/database prisma:generate",
     "prisma:migrate:dev": "pnpm --filter @futsmandu/database prisma:migrate:dev",
     "prisma:migrate:deploy": "pnpm --filter @futsmandu/database prisma:migrate:deploy",
@@ -63,7 +64,8 @@
     "lint": "eslint 'apps/**/*.ts' 'packages/**/*.ts'",
     "docker:build": "docker compose --env-file .env -f infrastructure/docker-compose.yml build",
     "docker:up": "docker compose --env-file .env -f infrastructure/docker-compose.yml up -d",
-    "docker:down": "docker compose --env-file .env -f infrastructure/docker-compose.yml down"
+    "docker:down": "docker compose --env-file .env -f infrastructure/docker-compose.yml down",
+    "seed:admin":"pnpm --filter @futsmandu/admin-api exec dotenv -e ../../.env -- tsx src/scripts/seed-admin.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
