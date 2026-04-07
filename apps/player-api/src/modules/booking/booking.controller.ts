@@ -13,7 +13,10 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
 import { Throttle } from '@nestjs/throttler'
 import type { FastifyReply } from 'fastify'
 import { BookingService } from './booking.service.js'
-import { HoldSlotDto, CancelBookingDto, BookingQueryDto } from './dto/booking.dto.js'
+import {
+  HoldSlotDto, CancelBookingDto, BookingQueryDto, RequestJoinDto,
+  RespondJoinRequestDto, AddFriendToMatchDto, OpenMatchesQueryDto,
+} from './dto/booking.dto.js'
 import { CurrentUser, Public } from '@futsmandu/auth'
 import type { AuthenticatedUser } from '@futsmandu/types'
 
@@ -44,7 +47,11 @@ export class BookingController {
     // SEC-5: Public callers only see AVAILABLE vs UNAVAILABLE — no internal state leakage
     return grid.map(slot => ({
       ...slot,
-      status: slot.status === 'AVAILABLE' ? 'AVAILABLE' : 'UNAVAILABLE',
+      status: String(slot.status) === 'AVAILABLE'
+        ? 'AVAILABLE'
+        : String(slot.status) === 'OPEN_TO_JOIN'
+          ? 'OPEN_TO_JOIN'
+          : 'UNAVAILABLE',
     }))
   }
 
@@ -87,5 +94,48 @@ export class BookingController {
     @Body() dto: CancelBookingDto,
   ) {
     return this.bookingService.cancelBooking(id, user.id, dto.reason)
+  }
+
+  @Post('matches/join')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Request to join an open match' })
+  requestJoinMatch(@CurrentUser() user: AuthenticatedUser, @Body() dto: RequestJoinDto) {
+    return this.bookingService.requestJoinMatch(user.id, dto)
+  }
+
+  @Post('matches/join-requests/:id/respond')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Accept or reject a match join request' })
+  respondJoinRequest(
+    @Param('id', ParseUUIDPipe) requestId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RespondJoinRequestDto,
+  ) {
+    return this.bookingService.respondToJoinRequest(user.id, { ...dto, requestId })
+  }
+
+  @Post('matches/:id/members/add-friend')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Add a friend directly to your match' })
+  addFriendToMatch(
+    @Param('id', ParseUUIDPipe) matchGroupId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: AddFriendToMatchDto,
+  ) {
+    return this.bookingService.addFriendToMatch(user.id, { ...dto, matchGroupId })
+  }
+
+  @Public()
+  @Get('matches')
+  @Throttle({ default: { limit: 60, ttl: 60000 } })
+  @ApiOperation({ summary: 'List open matches with available spots' })
+  getOpenMatches(@Query() query: OpenMatchesQueryDto) {
+    return this.bookingService.getOpenMatches(query)
+  }
+
+  @Get('matches/:id/members')
+  @ApiOperation({ summary: 'Get match members' })
+  getMatchMembers(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.bookingService.getMatchMembers(id, user.id)
   }
 }

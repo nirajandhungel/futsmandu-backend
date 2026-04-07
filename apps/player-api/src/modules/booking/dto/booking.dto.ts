@@ -7,12 +7,18 @@
 // apps/player-api/src/modules/booking/dto/booking.dto.ts
 import {
   IsUUID, IsDateString, Matches, IsArray, IsOptional,
-  IsString, MaxLength, IsEnum, IsInt, Min, Max, IsBase64,
-  ArrayMaxSize, IsNotEmpty,
+  IsString, MaxLength, IsEnum, IsInt, Min, Max, IsIn,
+  ArrayMaxSize,
 } from 'class-validator'
 import { Type, Transform } from 'class-transformer'
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
-import { booking_status } from '@futsmandu/database'
+import { booking_status, cost_split_mode, join_mode } from '@futsmandu/database'
+
+export enum FlexibleBookingType {
+  FULL = 'FULL',
+  PARTIAL = 'PARTIAL',
+  FLEX = 'FLEX',
+}
 
 export class HoldSlotDto {
   @ApiProperty()
@@ -34,6 +40,43 @@ export class HoldSlotDto {
   @ArrayMaxSize(9, { message: 'Maximum 9 friends per booking' })
   @IsUUID('4', { each: true })
   friendIds?: string[]
+
+  @ApiPropertyOptional({ enum: FlexibleBookingType, default: FlexibleBookingType.FLEX })
+  @IsOptional()
+  @IsEnum(FlexibleBookingType)
+  bookingType?: FlexibleBookingType
+
+  @ApiPropertyOptional({ minimum: 2, maximum: 30 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(2)
+  @Max(30)
+  requiredPlayers?: number
+
+  @ApiPropertyOptional({ minimum: 2, maximum: 30 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(2)
+  @Max(30)
+  maxPlayers?: number
+
+  @ApiPropertyOptional({ enum: join_mode, default: 'INVITE_ONLY' })
+  @IsOptional()
+  @IsEnum(join_mode)
+  joinMode?: join_mode
+
+  @ApiPropertyOptional({ enum: cost_split_mode, default: 'ADMIN_PAYS_ALL' })
+  @IsOptional()
+  @IsEnum(cost_split_mode)
+  costSplitMode?: cost_split_mode
+
+  @ApiPropertyOptional({ maxLength: 200 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  description?: string
 }
 
 export class CancelBookingDto {
@@ -75,4 +118,63 @@ export class BookingQueryDto {
   @IsString()
   @MaxLength(64)
   cursor?: string
+}
+
+export class RequestJoinDto {
+  @ApiProperty()
+  @IsUUID('4')
+  matchGroupId!: string
+
+  @ApiPropertyOptional({ maxLength: 300 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  message?: string
+}
+
+export class RespondJoinRequestDto {
+  @ApiProperty()
+  @IsUUID('4')
+  requestId!: string
+
+  @ApiProperty({ enum: ['ACCEPT', 'REJECT'] })
+  @IsIn(['ACCEPT', 'REJECT'])
+  action!: 'ACCEPT' | 'REJECT'
+}
+
+export class AddFriendToMatchDto {
+  @ApiProperty()
+  @IsUUID('4')
+  matchGroupId!: string
+
+  @ApiProperty()
+  @IsUUID('4')
+  friendId!: string
+}
+
+export class OpenMatchesQueryDto {
+  @ApiPropertyOptional({ example: '2026-04-07' })
+  @IsOptional()
+  @IsDateString()
+  date?: string
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID('4')
+  venueId?: string
+
+  @ApiPropertyOptional({ minimum: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 50 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  limit?: number
 }
