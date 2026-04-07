@@ -102,12 +102,34 @@ enum notification_type {
   BOOKING_CANCELLED
   SLOT_EXPIRING
   MATCH_INVITE
+  MATCH_JOIN_REQUEST
+  MATCH_JOIN_ACCEPTED
+  MATCH_JOIN_REJECTED
+  FRIEND_ADDED_TO_MATCH
   FRIEND_REQUEST
   FRIEND_ACCEPTED
   NO_SHOW_MARKED
   REVIEW_REQUEST
   MATCH_FULL
   GENERAL
+}
+
+enum join_mode {
+  INVITE_ONLY
+  OPEN
+  FRIENDS_ONLY
+}
+
+enum cost_split_mode {
+  ADMIN_PAYS_ALL
+  SPLIT_EQUAL
+}
+
+enum match_join_request_status {
+  PENDING
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
 }
 
 // ── Users ────────────────────────────────────────────────────────────────────
@@ -153,6 +175,9 @@ model users {
   reviews              reviews[]
   notifications        notifications[]
   preferred_roles      user_preferred_roles[]
+  sent_join_requests   match_join_requests[]   @relation("JoinRequester")
+  responded_requests   match_join_requests[]   @relation("JoinResponder")
+  invited_match_members match_group_members[]  @relation("InvitedBy")
 
   @@index([email])
   @@index([phone])
@@ -326,6 +351,7 @@ model bookings {
   created_by             String         @db.Uuid
   created_at             DateTime       @default(now()) @db.Timestamptz
   updated_at             DateTime       @updatedAt @db.Timestamptz
+  booking_meta           Json?
 
   // M-7: Direct relation — no payments_booking ghost model
   player       users?         @relation("PlayerBookings", fields: [player_id], references: [id], onDelete: SetNull)
@@ -365,6 +391,7 @@ model payments {
 
   booking bookings @relation(fields: [booking_id], references: [id])
   player  users    @relation(fields: [player_id], references: [id])
+  member_payments match_group_members[]
 
   @@index([gateway_tx_id])
   @@index([status])
@@ -383,9 +410,13 @@ model match_groups {
   end_time          String
   admin_id          String       @db.Uuid
   is_open           Boolean      @default(false)
+  join_mode         join_mode    @default(INVITE_ONLY)
+  cost_split_mode   cost_split_mode @default(ADMIN_PAYS_ALL)
   auto_accept       Boolean      @default(false)
   max_players       Int          @db.SmallInt
   min_players       Int          @db.SmallInt
+  slots_available   Int          @default(0)
+  description       String?
   skill_filter      skill_level?
   invite_token      String?      @unique
   token_expires_at  DateTime?    @db.Timestamptz
@@ -398,6 +429,7 @@ model match_groups {
   court   courts                @relation(fields: [court_id], references: [id])
   admin   users                 @relation(fields: [admin_id], references: [id])
   members match_group_members[]
+  join_requests match_join_requests[]
 
   @@index([is_open, match_date, start_time])
   @@index([invite_token])
@@ -412,13 +444,37 @@ model match_group_members {
   team_side      String?          @db.Char(1)
   position       player_role?
   status         mg_member_status @default(confirmed)
+  paid_amount    Int              @default(0)
+  payment_id     String?          @db.Uuid
+  invited_by     String?          @db.Uuid
   joined_at      DateTime         @default(now()) @db.Timestamptz
 
   match_group match_groups @relation(fields: [match_group_id], references: [id], onDelete: Cascade)
   user        users        @relation(fields: [user_id], references: [id])
+  payment     payments?    @relation(fields: [payment_id], references: [id])
+  inviter     users?       @relation("InvitedBy", fields: [invited_by], references: [id])
 
   @@unique([match_group_id, user_id])
   @@index([user_id])
+}
+
+model match_join_requests {
+  id             String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  match_group_id String                    @db.Uuid
+  user_id        String                    @db.Uuid
+  message        String?
+  status         match_join_request_status @default(PENDING)
+  created_at     DateTime                  @default(now()) @db.Timestamptz
+  responded_at   DateTime?                 @db.Timestamptz
+  responded_by   String?                   @db.Uuid
+
+  match_group match_groups @relation(fields: [match_group_id], references: [id], onDelete: Cascade)
+  user       users         @relation("JoinRequester", fields: [user_id], references: [id])
+  responder  users?        @relation("JoinResponder", fields: [responded_by], references: [id])
+
+  @@unique([match_group_id, user_id])
+  @@index([match_group_id, status])
+  @@index([user_id, status])
 }
 
 // ── Social ───────────────────────────────────────────────────────────────────
@@ -507,6 +563,23 @@ model notifications {
   user users @relation(fields: [user_id], references: [id])
 
   @@index([user_id, is_read, created_at(sort: Desc)])
+}
+
+model media_assets {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key         String   @unique
+  assetType   String   @map("asset_type")
+  status      String   @default("pending")
+  uploaderId  String   @map("uploader_id") @db.Uuid
+  entityId    String   @map("entity_id")
+  webpKey     String?  @map("webp_key")
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([entityId, assetType])
+  @@index([status])
+  @@map("media_assets")
 }
 
 model invite_tokens {
