@@ -15,6 +15,7 @@ export class BookingService {
   ) {}
 
   holdSlot(playerId: string, dto: HoldSlotDto) { return this.lifecycle.holdSlot(playerId, dto) }
+  
   confirmPayment(bookingId: string, verified: GatewayVerification, gateway: 'KHALTI' | 'ESEWA') { return this.lifecycle.confirmPayment(bookingId, verified, gateway) }
   initiatePayment(bookingId: string, gateway: 'KHALTI' | 'ESEWA', playerId: string) { return this.lifecycle.initiatePayment(bookingId, gateway, playerId) }
   cancelBooking(bookingId: string, cancelledBy: string, reason?: string) { return this.lifecycle.cancelBooking(bookingId, cancelledBy, reason) }
