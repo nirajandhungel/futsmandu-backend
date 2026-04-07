@@ -5,9 +5,10 @@
 // JWT: OWNER_JWT_SECRET only — never shares secret with admin or player.
 
 import { Module } from '@nestjs/common'
+import { APP_GUARD } from '@nestjs/core'
 import { ConfigModule } from '@nestjs/config'
 import { JwtModule } from '@nestjs/jwt'
-import { ThrottlerModule } from '@nestjs/throttler'
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler'
 
 import { PrismaModule } from '@futsmandu/database'
 import { RedisModule } from '@futsmandu/redis'
@@ -60,6 +61,12 @@ import { ENV } from '@futsmandu/utils'
     MediaModule,
     NotificationsModule,
     HealthModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}
