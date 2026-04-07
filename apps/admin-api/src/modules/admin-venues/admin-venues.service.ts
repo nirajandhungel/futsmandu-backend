@@ -1,10 +1,14 @@
+// apps/admin-api/src/modules/admin-venues/admin-venues.service.ts
+// CHANGED: Removed inline S3Client instantiation in getOwnerDocUrl().
+// Now delegates to @futsmandu/media MediaService.getSignedDownloadUrl().
+
 import {
   Injectable, NotFoundException, Logger,
 } from '@nestjs/common'
 import { PrismaService } from '@futsmandu/database'
 import { InjectQueue } from '@nestjs/bullmq'
 import { Queue } from 'bullmq'
-import { ENV } from '@futsmandu/utils'
+import { MediaService } from '@futsmandu/media'
 
 @Injectable()
 export class AdminVenuesService {
@@ -12,8 +16,9 @@ export class AdminVenuesService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly media: MediaService,   // ← replaces inline S3 code
     @InjectQueue('admin-emails') private readonly emailQueue: Queue,
-  ) { }
+  ) {}
 
   async listPendingVenues(page = 1) {
     const PAGE_SIZE = 20
@@ -39,8 +44,6 @@ export class AdminVenuesService {
   }
 
   async listFlaggedVenues(page = 1) {
-    // Flagged venues — stored as a tag in a future "flags" table.
-    // For now, we use amenities array containing 'FLAGGED' as sentinel.
     const PAGE_SIZE = 20
     const skip = (page - 1) * PAGE_SIZE
 
@@ -75,29 +78,25 @@ export class AdminVenuesService {
     await this.prisma.venues.update({
       where: { id: venueId },
       data: {
-        isApproved: true,
-        approvedAt: new Date(),
+        isApproved:   true,
+        approvedAt:   new Date(),
         approvedById: adminId,
-        // Legacy field kept in sync for owner-api compatibility during migration
-        is_verified: true,
-        updated_at: new Date(),
+        is_verified:  true,
+        updated_at:   new Date(),
       },
     })
 
-    // Approving a venue implies approving the owning account KYC (syncing legacy is_verified too).
     await this.prisma.owners.update({
       where: { id: venue.owner.id },
       data: {
-        isKycApproved: true,
-        kycApprovedAt: new Date(),
+        isKycApproved:   true,
+        kycApprovedAt:   new Date(),
         kycApprovedById: adminId,
-        // Legacy field kept in sync for owner-api compatibility
-        is_verified: true,
-        updated_at: new Date(),
+        is_verified:     true,
+        updated_at:      new Date(),
       },
     })
 
-    // Notify owner
     await this.emailQueue
       .add(
         'verification-approved',
@@ -123,17 +122,15 @@ export class AdminVenuesService {
     await this.prisma.venues.update({
       where: { id: venueId },
       data: {
-        isApproved: false,
-        approvedAt: null,
+        isApproved:   false,
+        approvedAt:   null,
         approvedById: null,
-        // Legacy field kept in sync for owner-api compatibility during migration
-        is_verified: false,
-        is_active: false,
-        updated_at: new Date(),
+        is_verified:  false,
+        is_active:    false,
+        updated_at:   new Date(),
       },
     })
 
-    // If the owner has no other approved venues left, revoke owner KYC (legacy + new fields).
     const remainingApproved = await this.prisma.venues.count({
       where: { owner_id: venue.owner.id, isApproved: true, is_active: true },
     })
@@ -141,12 +138,11 @@ export class AdminVenuesService {
       await this.prisma.owners.update({
         where: { id: venue.owner.id },
         data: {
-          isKycApproved: false,
-          kycApprovedAt: null,
+          isKycApproved:   false,
+          kycApprovedAt:   null,
           kycApprovedById: null,
-          // Legacy field kept in sync for owner-api compatibility
-          is_verified: false,
-          updated_at: new Date(),
+          is_verified:     false,
+          updated_at:      new Date(),
         },
       })
     }
@@ -163,26 +159,19 @@ export class AdminVenuesService {
     return { message: 'Venue rejected', venueId }
   }
 
-  async getOwnerDocUrl(ownerId: string, docType: string): Promise<{ downloadUrl: string }> {
-    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3')
-    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner')
+  // ── Admin-only: signed GET URL for private KYC doc ────────────────────────
+  // CHANGED: no more inline S3Client — delegates to shared MediaService
+  async getOwnerDocUrl(ownerId: string, docType: string): Promise<{ downloadUrl: string; expiresIn: number }> {
+    const key = `owners/${ownerId}/kyc/${docType}.pdf`
+    return this.media.getSignedDownloadUrl({ key, expiresIn: 600 })
+  }
 
-    const s3 = new S3Client({
-      region: 'auto',
-      endpoint: `https://${ENV['CF_ACCOUNT_ID']}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: ENV['R2_ACCESS_KEY_ID'] as string,
-        secretAccessKey: ENV['R2_SECRET_ACCESS_KEY'] as string,
-      },
-    })
-
-    const key = `verify/${ownerId}/${docType}.pdf`
-    const command = new GetObjectCommand({
-      Bucket: ENV['R2_BUCKET_NAME'],
-      Key: key,
-    })
-
-    const downloadUrl = await getSignedUrl(s3, command, { expiresIn: 600 }) // 10 min
-    return { downloadUrl }
+  // Admin can also access venue verification images
+  async getVenueVerificationUrl(venueId: string, key: string): Promise<{ downloadUrl: string; expiresIn: number }> {
+    // Key must be under venues/{venueId}/verification/
+    if (!key.startsWith(`venues/${venueId}/verification/`)) {
+      throw new NotFoundException('Verification image not found for this venue')
+    }
+    return this.media.getSignedDownloadUrl({ key, expiresIn: 600 })
   }
 }
