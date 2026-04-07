@@ -129,17 +129,18 @@ export class OwnerAuthService {
     const { getSignedUrl }              = await import('@aws-sdk/s3-request-presigner')
 
     const s3 = new S3Client({
-      region:   'auto',
-      endpoint: `https://${ENV['CF_ACCOUNT_ID']}.r2.cloudflarestorage.com`,
+      region:   ENV['S3_REGION'] || 'us-east-1',
+      endpoint: ENV['S3_ENDPOINT'],
+      forcePathStyle: ENV['S3_FORCE_PATH_STYLE'] === 'true',
       credentials: {
-        accessKeyId:     ENV['R2_ACCESS_KEY_ID'],
-        secretAccessKey: ENV['R2_SECRET_ACCESS_KEY'],
+        accessKeyId:     ENV['S3_ACCESS_KEY'],
+        secretAccessKey: ENV['S3_SECRET_KEY'],
       },
     })
 
     const key = `verify/${ownerId}/${docType}.pdf`
     const cmd = new PutObjectCommand({
-      Bucket:       ENV['R2_BUCKET_NAME'],
+      Bucket:       ENV['S3_BUCKET'],
       Key:          key,
       ContentType:  'application/pdf',
       CacheControl: 'no-store, private',
