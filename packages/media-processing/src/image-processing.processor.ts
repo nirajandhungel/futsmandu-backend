@@ -26,6 +26,11 @@ export class ImageProcessingProcessor extends WorkerHost {
     if (job.name !== 'process-media') return
 
     const { assetId, key, assetType, targetWidth, targetHeight } = job.data
+    if (assetType === 'kyc_document') {
+      this.logger.warn(`Skipping image processor for PDF/KYC asset ${assetId}: ${key}`)
+      await this.markReady(assetId)
+      return
+    }
     this.logger.log(`Processing image asset ${assetId}: ${key}`)
 
     try {
@@ -52,7 +57,7 @@ export class ImageProcessingProcessor extends WorkerHost {
 
       const cacheControl = getCacheControl(assetType)
 
-      const webpKey = key.replace(/\\.[^.]+$/, '.webp')
+      const webpKey = key.replace(/\.[^.]+$/, '.webp')
       const resizedWebp = await (sharp as unknown as (buf: Buffer) => import('sharp').Sharp)(inputBuffer)
         .resize(targetWidth, targetHeight, { fit: 'cover', position: 'centre', withoutEnlargement: true })
         .webp({ quality: 85 })
@@ -67,7 +72,7 @@ export class ImageProcessingProcessor extends WorkerHost {
       }))
 
       // Overwrite the original extension file but safely parsed
-      const jpegKey = key.replace(/\\.[^.]+$/, '.jpg')
+      const jpegKey = key.replace(/\.[^.]+$/, '.jpg')
       const resizedJpeg = await (sharp as unknown as (buf: Buffer) => import('sharp').Sharp)(inputBuffer)
         .resize(targetWidth, targetHeight, { fit: 'cover', position: 'centre', withoutEnlargement: true })
         .jpeg({ quality: 85, progressive: true })
@@ -81,7 +86,7 @@ export class ImageProcessingProcessor extends WorkerHost {
         CacheControl: cacheControl,
       }))
 
-      const thumbKey = key.replace(/\\.[^.]+$/, '_thumb.jpg')
+      const thumbKey = key.replace(/\.[^.]+$/, '_thumb.jpg')
       const thumb = await (sharp as unknown as (buf: Buffer) => import('sharp').Sharp)(inputBuffer)
         .resize(400, 300, { fit: 'cover', position: 'centre' })
         .jpeg({ quality: 75 })
