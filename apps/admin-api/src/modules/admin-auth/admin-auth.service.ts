@@ -5,7 +5,7 @@ import {
   Injectable, UnauthorizedException, ForbiddenException, Logger,
 } from '@nestjs/common'
 import { JwtService } from '@nestjs/jwt'
-import * as bcrypt from 'bcryptjs'
+import bcrypt from 'bcryptjs'
 import { PrismaService } from '@futsmandu/database'
 import type { AdminLoginDto } from './dto/admin-auth.dto.js'
 import { ENV } from '@futsmandu/utils'
