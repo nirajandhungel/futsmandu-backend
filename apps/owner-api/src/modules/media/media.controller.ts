@@ -2,8 +2,9 @@
 // Thin controller — zero business logic. All logic lives in @futsmandu/media.
 // REPLACES the old media.controller.ts that had hardcoded paths.
 
-import { Controller, Post, Delete, Body, Query, UseGuards, Param, ParseUUIDPipe } from '@nestjs/common'
+import { Controller, Post, Delete, Body, Query, UseGuards, Param, ParseUUIDPipe, Get } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
+import { Throttle } from '@nestjs/throttler'
 import { MediaService } from '@futsmandu/media'
 import { RequestUploadUrlDto, ConfirmUploadDto, DeleteAssetDto, OwnerKycUploadUrlDto } from '../../dto/media.dto.js'
 import { OwnerJwtGuard } from '../../common/guards/owner-jwt.guard.js'
@@ -17,6 +18,7 @@ export class MediaController {
   constructor(private readonly media: MediaService) {}
 
   @Post('upload-url')
+  @Throttle({ default: { limit: 50, ttl: 60_000 } })
   @ApiOperation({ summary: 'Request presigned R2 upload URL (venue images, KYC docs, owner profile)' })
   requestUploadUrl(
     @CurrentOwner() owner: { id: string },
@@ -27,6 +29,7 @@ export class MediaController {
       ownerId:   owner.id,
       entityId:  dto.entityId,
       docType:   dto.docType,
+      contentType: dto.contentType,
     })
   }
 
@@ -54,6 +57,7 @@ export class MediaController {
       ownerId: owner.id,
       entityId: owner.id,
       docType: dto.docType,
+      contentType: dto.contentType,
     })
   }
 
@@ -100,5 +104,14 @@ export class MediaController {
     @Query() dto: DeleteAssetDto,
   ) {
     return this.media.deleteAsset(dto.assetId, owner.id)
+  }
+
+  @Get('status/:assetId')
+  @ApiOperation({ summary: 'Get upload/processing status for an asset' })
+  getUploadStatus(
+    @CurrentOwner() owner: { id: string },
+    @Param('assetId', ParseUUIDPipe) assetId: string,
+  ) {
+    return this.media.getUploadStatus(assetId, owner.id)
   }
 }
