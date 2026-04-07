@@ -730,50 +730,82 @@ Base: `/api/v1/owner/media`
 
 All media endpoints are protected by `OwnerJwtGuard`.
 
-### Venue Cover Upload URL
-`POST /api/v1/owner/media/venues/:venueId/cover-upload-url`
-
-Success response:
-```json
-{ "data": { "uploadUrl": "PRESIGNED_PUT_URL", "cdnUrl": "string", "key": "string" } }
-```
-
-### Venue Gallery Upload URL
-`POST /api/v1/owner/media/venues/:venueId/gallery-upload-url`
-
-Success response:
-```json
-{ "data": { "uploadUrl": "PRESIGNED_PUT_URL", "cdnUrl": "string", "key": "string" } }
-```
-
-### Presigned Upload URL for Verification Documents (private)
-`POST /api/v1/owner/media/documents/upload-url`
+### Request Upload URL (Legacy, generic)
+`POST /api/v1/owner/media/upload-url`
 
 Request body:
-- `docType`: one of `nid_front | nid_back | business_registration | tax_certificate`
+- `assetType` (required): `owner_profile | kyc_document | venue_cover | venue_gallery | venue_verification`
+- `entityId` (required):
+  - For `owner_profile` and `kyc_document`: must be your authenticated owner id.
+  - For `venue_cover`, `venue_gallery`, `venue_verification`: must be the venue id that belongs to you.
+- `docType` (required only when `assetType=kyc_document`): one of `nid_front | nid_back | business_registration | tax_certificate`
+
+Example (`kyc_document`):
+```json
+{
+  "assetType": "kyc_document",
+  "entityId": "<OWNER_ID>",
+  "docType": "nid_front"
+}
+```
 
 Success response:
 ```json
-{ "data": { "uploadUrl": "PRESIGNED_PUT_URL", "key": "verify/<ownerId>/<docType>.pdf" } }
+{
+  "data": {
+    "uploadUrl": "PRESIGNED_PUT_URL",
+    "key": "owners/<ownerId>/kyc/nid_front.pdf",
+    "expiresIn": 600
+  }
+}
 ```
 
-### Confirm Upload (enqueue resize job)
+`cdnUrl` is included for public asset types (for example venue images). KYC documents are private and do not return `cdnUrl`.
+
+### Confirm Upload
 `POST /api/v1/owner/media/confirm-upload`
 
 Request body:
-- `key` (string)
-- `width` (number, optional default `1280`)
-- `height` (number, optional default `720`)
+- `key` (required)
+- `assetType` (required): same asset type used in upload-url request
 
-Success response: controller returns `void`, so you should see an envelope with empty data:
+Success response:
 ```json
-{ "data": null }
+{ "data": { "message": "Upload confirmed — processing started" } }
 ```
 
-### Delete R2 Object
-`DELETE /api/v1/owner/media/object?key=<R2_KEY>`
+For non-KYC assets, this enqueues image processing. For KYC documents, asset status is marked as `ready` immediately.
 
-Success response: controller returns `void`:
+### KYC Upload URL (recommended)
+`POST /api/v1/owner/media/kyc/upload-url`
+
+Request body:
+- `docType` (required): `nid_front | nid_back | business_registration | tax_certificate`
+
+Success response:
+```json
+{
+  "data": {
+    "uploadUrl": "PRESIGNED_PUT_URL",
+    "key": "owners/<ownerId>/kyc/nid_front.pdf",
+    "expiresIn": 600
+  }
+}
+```
+
+### Venue Cover Upload URL (recommended)
+`POST /api/v1/owner/media/venues/:venueId/images/cover/upload-url`
+
+### Venue Gallery Upload URL (recommended)
+`POST /api/v1/owner/media/venues/:venueId/images/gallery/upload-url`
+
+### Owner Avatar Upload URL (recommended)
+`POST /api/v1/owner/media/profile/avatar/upload-url`
+
+### Delete Asset
+`DELETE /api/v1/owner/media/asset?assetId=<MEDIA_ASSET_ID>`
+
+Success response:
 ```json
 { "data": null }
 ```
