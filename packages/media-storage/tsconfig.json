@@ -4,7 +4,8 @@
     "outDir": "dist",
     "rootDir": "src",
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
-    "composite": true
+    "composite": true,
+    "types": ["node"]   
   },
   "include": [
     "src/**/*"
