@@ -40,12 +40,15 @@ export const ENV = {
   ESEWA_SECRET_KEY:   process.env['ESEWA_SECRET_KEY']   as string,
   ESEWA_PRODUCT_CODE: process.env['ESEWA_PRODUCT_CODE'] as string,
 
-  // ── Cloudflare R2 ─────────────────────────────────────────────────────────
-  CF_ACCOUNT_ID:        process.env['CF_ACCOUNT_ID']        as string,
-  R2_ACCESS_KEY_ID:     process.env['R2_ACCESS_KEY_ID']     as string,
-  R2_SECRET_ACCESS_KEY: process.env['R2_SECRET_ACCESS_KEY'] as string,
-  R2_BUCKET_NAME:       process.env['R2_BUCKET_NAME']       as string,
-  R2_CDN_BASE_URL:      process.env['R2_CDN_BASE_URL']      as string,
+  // ── Storage (Provider-agnostic) ───────────────────────────────────────────
+  STORAGE_PROVIDER:    process.env['STORAGE_PROVIDER']    as string,
+  S3_ENDPOINT:         process.env['S3_ENDPOINT']         as string,
+  S3_REGION:           process.env['S3_REGION']           as string,
+  S3_ACCESS_KEY:       process.env['S3_ACCESS_KEY']       as string,
+  S3_SECRET_KEY:       process.env['S3_SECRET_KEY']       as string,
+  S3_BUCKET:           process.env['S3_BUCKET']           as string,
+  S3_FORCE_PATH_STYLE: process.env['S3_FORCE_PATH_STYLE'] as string,
+  S3_CDN_BASE_URL:     process.env['S3_CDN_BASE_URL']     as string,
 
   // ── Notifications ──────────────────────────────────────────────────────────
   FIREBASE_SERVICE_ACCOUNT: process.env['FIREBASE_SERVICE_ACCOUNT'] as string,
