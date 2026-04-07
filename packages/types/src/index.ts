@@ -74,7 +74,7 @@ export interface EsewaInitResult {
 export interface SlotGridItem {
   startTime: string
   endTime: string
-  status: 'AVAILABLE' | 'HELD' | 'PENDING_PAYMENT' | 'CONFIRMED'
+  status: 'AVAILABLE' | 'HELD' | 'PENDING_PAYMENT' | 'CONFIRMED' | 'OPEN_TO_JOIN'
   price?: number
   displayPrice?: string
 }
@@ -134,7 +134,12 @@ export interface SlotExpiryJobData {
 }
 
 export interface EmailJobData {
-  type: 'verification-email' | 'password-reset' | 'booking-confirmation' | 'booking-cancelled'
+  type:
+    | 'verification-email'
+    | 'password-reset'
+    | 'booking-confirmation'
+    | 'booking-cancelled'
+    | 'FRIEND_ADDED_TO_MATCH'
   to: string
   name?: string
   data?: Record<string, unknown>
