@@ -9,7 +9,7 @@
 // PgBouncer-safe: connection_limit per instance, pgbouncer=true required in DATABASE_URL.
 // Pool budget: player-api=5/instance, owner-api=3/instance, worker=2/instance.
 
-import { Injectable, InternalServerErrorException, OnModuleDestroy, OnModuleInit, Logger } from '@nestjs/common'
+import { Injectable, InternalServerErrorException, OnModuleDestroy, OnModuleInit, Logger, Optional } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import * as PrismaGenerated from '../generated/prisma/index.js'
 import { ENV } from '@futsmandu/utils'
@@ -24,7 +24,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   private readonly logger = new Logger(PrismaService.name)
   private readonly config?: ConfigService
 
-  constructor(config?: ConfigService) {
+  constructor(@Optional() config?: ConfigService) {
     // NOTE: super() must run before any `this.*` access in derived classes.
     const baseUrl =
       config?.get<string>('DATABASE_URL', { infer: true }) ??
