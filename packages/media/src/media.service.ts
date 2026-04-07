@@ -4,23 +4,26 @@ import { Queue } from 'bullmq'
 import { PrismaService } from '@futsmandu/database'
 import { QUEUE_IMAGE_PROCESSING } from '@futsmandu/queues'
 import { ENV } from '@futsmandu/utils'
+import { fileTypeFromBuffer } from 'file-type'
 
 import {
-  AssetType, KycDocType, PUBLIC_ASSET_TYPES,
+  AssetType, PUBLIC_ASSET_TYPES,
   RequestUploadUrlOptions, UploadUrlResult, ConfirmUploadOptions,
   SignedDownloadUrlOptions, ImageProcessingJobData, generateMediaKey,
-  getContentType, getCacheControl, getResizeDimensions
+  getContentType, getCacheControl, getResizeDimensions, ALLOWED_MIME_TYPES,
+  AllowedMimeType, getAllowedMimeTypesForAssetType, getAllowedExtensionsForAssetType, getPreferredExtensionForMimeType
 } from '@futsmandu/media-core'
 
 import {
   generateSignedUploadUrl, generateSignedDownloadUrl,
-  deleteStorageObject, StorageConfig, formatCdnUrl
+  deleteStorageObject, StorageConfig, formatCdnUrl, getStorageObjectMetadata, downloadStorageObjectBuffer
 } from '@futsmandu/media-storage'
 
 import { MEDIA_STORAGE_CONFIG } from './media.constants.js'
 
 const PRESIGN_EXPIRY_SECONDS = 600
-const ALLOWED_KYC_DOC_TYPES: KycDocType[] = ['nid_front', 'nid_back', 'business_registration', 'tax_certificate']
+const MAX_FILE_SIZE = 5 * 1024 * 1024
+const ALLOWED_KYC_DOC_TYPES = ['citizenship', 'business_registration', 'business_pan'] as const
 
 @Injectable()
 export class MediaService {
@@ -41,10 +44,23 @@ export class MediaService {
       }
     }
 
-    const key = generateMediaKey({ assetType: opts.assetType, entityId: opts.entityId, docType: opts.docType })
-    const contentType = getContentType(opts.assetType)
+    const contentType = this.resolveAllowedContentType(opts.assetType, opts.contentType)
+    const key = generateMediaKey({
+      assetType: opts.assetType,
+      entityId: opts.entityId,
+      docType: opts.docType,
+      extension: getPreferredExtensionForMimeType(contentType),
+    })
     const cacheControl = getCacheControl(opts.assetType)
     const isPublic = PUBLIC_ASSET_TYPES.includes(opts.assetType)
+
+    this.logger.log(JSON.stringify({
+      event: 'UPLOAD_STARTED',
+      ownerId: opts.ownerId,
+      assetType: opts.assetType,
+      mimeType: contentType,
+      fileSize: null,
+    }))
 
     const uploadUrl = await generateSignedUploadUrl(this.storageConfig, {
       key,
@@ -68,11 +84,68 @@ export class MediaService {
 
   async confirmUpload(opts: ConfirmUploadOptions & { ownerId: string }): Promise<{ message: string }> {
     try {
-      const probeUrl = await generateSignedDownloadUrl(this.storageConfig, { key: opts.key, expiresIn: 30 })
-      const probe = await fetch(probeUrl, { method: 'HEAD' })
-      if (!probe.ok) throw new Error(`Storage probe failed: ${probe.status}`)
-    } catch {
-      throw new BadRequestException('Object not found in storage. Upload the file first, then call confirm-upload.')
+      const objectMeta = await getStorageObjectMetadata(this.storageConfig, opts.key)
+      const objectSize = objectMeta.contentLength ?? 0
+      if (objectSize <= 0) {
+        await this.safeDeleteObject(opts.key)
+        throw new BadRequestException('Invalid file format')
+      }
+      if (objectSize > MAX_FILE_SIZE) {
+        await this.safeDeleteObject(opts.key)
+        throw new BadRequestException('File is too large. Max allowed size is 5MB')
+      }
+
+      const expectedContentType = this.resolveAllowedContentType(opts.assetType, objectMeta.contentType)
+      const buffer = await downloadStorageObjectBuffer(this.storageConfig, opts.key)
+      const detected = await fileTypeFromBuffer(buffer)
+      if (!detected || !ALLOWED_MIME_TYPES.includes(detected.mime as AllowedMimeType)) {
+        await this.safeDeleteObject(opts.key)
+        throw new BadRequestException('Invalid file format')
+      }
+
+      const detectedMime = detected.mime as AllowedMimeType
+      if (detectedMime !== expectedContentType) {
+        await this.safeDeleteObject(opts.key)
+        throw new BadRequestException('Invalid file format')
+      }
+
+      if (!this.extensionMatchesMime(opts.key, detectedMime, opts.assetType)) {
+        await this.safeDeleteObject(opts.key)
+        throw new BadRequestException('Invalid file format')
+      }
+
+      this.logger.log(JSON.stringify({
+        event: 'UPLOAD_VALIDATED',
+        ownerId: opts.ownerId,
+        assetType: opts.assetType,
+        fileSize: objectSize,
+        mimeType: detectedMime,
+      }))
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        this.logger.warn(JSON.stringify({
+          event: 'UPLOAD_REJECTED',
+          ownerId: opts.ownerId,
+          assetType: opts.assetType,
+          reason: String(error),
+        }))
+        throw error
+      }
+
+      if (this.isStorageNotFoundError(error)) {
+        throw new BadRequestException('Object not found in storage. Upload the file first, then call confirm-upload.')
+      }
+
+      this.logger.error(JSON.stringify({
+        event: 'UPLOAD_FAILED',
+        ownerId: opts.ownerId,
+        assetType: opts.assetType,
+        reason: error instanceof Error ? error.message : String(error),
+      }))
+      throw new BadRequestException({
+        message: 'Unable to verify uploaded file, please retry',
+        retryable: true,
+      })
     }
 
     const entityId = this.extractEntityIdFromKey(opts.key, opts.assetType)
@@ -127,7 +200,23 @@ export class MediaService {
 
     await this.syncDomainMediaPointers(opts.assetType, entityId, opts.key)
 
+    this.logger.log(JSON.stringify({
+      event: 'UPLOAD_COMPLETED',
+      ownerId: opts.ownerId,
+      assetType: opts.assetType,
+      fileSize: null,
+      mimeType: null,
+    }))
+
     return { message: 'Upload confirmed — processing started' }
+  }
+
+  async getUploadStatus(assetId: string, ownerId: string): Promise<{ status: 'processing' | 'ready' | 'failed' }> {
+    const asset = await this.prisma.media_assets.findUnique({ where: { id: assetId } })
+    if (!asset || asset.uploaderId !== ownerId) {
+      throw new NotFoundException('Asset not found')
+    }
+    return { status: asset.status as 'processing' | 'ready' | 'failed' }
   }
 
   async getSignedDownloadUrl(opts: SignedDownloadUrlOptions): Promise<{ downloadUrl: string; expiresIn: number }> {
@@ -247,7 +336,7 @@ export class MediaService {
       const docs = (current?.verification_docs && typeof current.verification_docs === 'object'
         ? current.verification_docs
         : {}) as Record<string, unknown>
-      const docType = key.split('/').pop()?.replace('.pdf', '')
+      const docType = key.split('/').pop()?.replace(/\.[^/.]+$/, '')
       if (!docType) return
       await this.prisma.owners.update({
         where: { id: entityId },
@@ -257,5 +346,40 @@ export class MediaService {
         },
       }).catch(() => {})
     }
+  }
+
+  private resolveAllowedContentType(assetType: AssetType, contentType?: string): AllowedMimeType {
+    const fallback = getContentType(assetType) as AllowedMimeType
+    const candidate = (contentType ?? fallback).toLowerCase() as AllowedMimeType
+    const allowedForAssetType = getAllowedMimeTypesForAssetType(assetType)
+    if (!allowedForAssetType.includes(candidate)) {
+      throw new BadRequestException('Unsupported file type')
+    }
+    return candidate
+  }
+
+  private extensionMatchesMime(key: string, mime: AllowedMimeType, assetType: AssetType): boolean {
+    const ext = `.${key.split('.').pop()?.toLowerCase() ?? ''}`
+    if (!getAllowedExtensionsForAssetType(assetType).includes(ext)) return false
+    if (mime === 'image/jpeg') return ext === '.jpg' || ext === '.jpeg'
+    if (mime === 'image/png') return ext === '.png'
+    if (mime === 'image/webp') return ext === '.webp'
+    if (mime === 'application/pdf') return ext === '.pdf'
+    return false
+  }
+
+  private async safeDeleteObject(key: string): Promise<void> {
+    await deleteStorageObject(this.storageConfig, key).catch(() => {})
+  }
+
+  private isStorageNotFoundError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false
+    const name = 'name' in error ? String(error.name) : ''
+    const code = 'Code' in error ? String(error.Code) : ''
+    const status = '$metadata' in error && error.$metadata && typeof error.$metadata === 'object'
+      ? Number((error.$metadata as { httpStatusCode?: number }).httpStatusCode)
+      : NaN
+
+    return name === 'NotFound' || code === 'NoSuchKey' || status === 404
   }
 }
