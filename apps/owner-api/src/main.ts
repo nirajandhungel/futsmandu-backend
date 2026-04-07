@@ -30,11 +30,12 @@ function validateEnv(): void {
   // (+ rediss:// format check) to the centralized validator.
   validateENV([
     'OWNER_JWT_SECRET',
-    'CF_ACCOUNT_ID',
-    'R2_ACCESS_KEY_ID',
-    'R2_SECRET_ACCESS_KEY',
-    'R2_BUCKET_NAME',
-    'R2_CDN_BASE_URL',
+    'STORAGE_PROVIDER',
+    'S3_ENDPOINT',
+    'S3_REGION',
+    'S3_ACCESS_KEY',
+    'S3_SECRET_KEY',
+    'S3_BUCKET',
   ])
 
   if ((ENV.OWNER_JWT_SECRET?.length ?? 0) < 32) {
