@@ -1,0 +1,36 @@
+{
+  "name": "@futsmandu/media",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "dev": "tsc --project tsconfig.json --watch"
+  },
+  "dependencies": {
+    "@futsmandu/database": "workspace:*",
+    "@futsmandu/queues": "workspace:*",
+    "@futsmandu/utils": "workspace:*",
+    "@futsmandu/media-core": "workspace:*",
+    "@futsmandu/media-storage": "workspace:*",
+    "@futsmandu/media-processing": "workspace:*",
+    "@nestjs/bullmq": "^11.0.2",
+    "@nestjs/common": "^11.0.11",
+    "bullmq": "^5.34.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "@types/node": "^22.0.0"
+  },
+  "peerDependencies": {
+    "@nestjs/core": ">=10.0.0"
+  }
+}
