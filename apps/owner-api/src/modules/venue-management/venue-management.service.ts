@@ -1,12 +1,20 @@
 // Venue management service — CRUD for venues, courts, and image uploads.
 // Every query scoped to owner_id — never returns another owner's data.
 import {
-  Injectable, NotFoundException, ConflictException, Logger,
+  Injectable, NotFoundException, ConflictException, BadRequestException, Logger,
 } from '@nestjs/common'
 import { PrismaService } from '@futsmandu/database'
 import type { Prisma } from '@futsmandu/database'
 import type { CreateVenueDto, UpdateVenueDto, CreateCourtDto, UpdateCourtDto } from './dto/venue.dto.js'
 import { ENV } from '@futsmandu/utils'
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function validateUuid(value: string, label = 'ID'): void {
+  if (!UUID_RE.test(value)) {
+    throw new BadRequestException(`Invalid ${label} — must be a valid UUID`)
+  }
+}
 
 function slugify(name: string): string {
   return (
@@ -193,6 +201,7 @@ export class VenueManagementService {
 
   // ── Ownership guards ───────────────────────────────────────────────────────
   private async assertVenueOwnership(venueId: string, ownerId: string): Promise<void> {
+    validateUuid(venueId, 'venue ID')
     const venue = await this.prisma.venues.findFirst({
       where:  { id: venueId, owner_id: ownerId },
       select: { id: true },
@@ -201,6 +210,7 @@ export class VenueManagementService {
   }
 
   private async assertCourtOwnership(courtId: string, ownerId: string): Promise<void> {
+    validateUuid(courtId, 'court ID')
     const court = await this.prisma.courts.findFirst({
       where:  { id: courtId, venue: { owner_id: ownerId } },
       select: { id: true },
