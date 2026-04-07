@@ -34,9 +34,15 @@ importers:
       dotenv-cli:
         specifier: ^11.0.0
         version: 11.0.0
+      dotenv-safe:
+        specifier: ^9.1.0
+        version: 9.1.0(dotenv@17.4.0)
       eslint:
         specifier: ^9.25.1
         version: 9.39.4(jiti@2.6.1)
+      rimraf:
+        specifier: ^6.1.3
+        version: 6.1.3
       ts-node:
         specifier: ^10.9.2
         version: 10.9.2(@types/node@22.19.17)(typescript@5.9.3)
@@ -76,6 +82,12 @@ importers:
       '@futsmandu/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@futsmandu/media':
+        specifier: workspace:*
+        version: link:../../packages/media
+      '@futsmandu/media-core':
+        specifier: workspace:*
+        version: link:../../packages/media-core
       '@futsmandu/queues':
         specifier: workspace:*
         version: link:../../packages/queues
@@ -194,6 +206,12 @@ importers:
       '@futsmandu/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@futsmandu/media':
+        specifier: workspace:*
+        version: link:../../packages/media
+      '@futsmandu/media-core':
+        specifier: workspace:*
+        version: link:../../packages/media-core
       '@futsmandu/queues':
         specifier: workspace:*
         version: link:../../packages/queues
@@ -318,6 +336,12 @@ importers:
       '@futsmandu/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@futsmandu/media':
+        specifier: workspace:*
+        version: link:../../packages/media
+      '@futsmandu/media-core':
+        specifier: workspace:*
+        version: link:../../packages/media-core
       '@futsmandu/queues':
         specifier: workspace:*
         version: link:../../packages/queues
@@ -476,6 +500,114 @@ importers:
       '@nestjs/common':
         specifier: ^11.0.11
         version: 11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+
+  packages/media:
+    dependencies:
+      '@futsmandu/database':
+        specifier: workspace:*
+        version: link:../database
+      '@futsmandu/media-core':
+        specifier: workspace:*
+        version: link:../media-core
+      '@futsmandu/media-processing':
+        specifier: workspace:*
+        version: link:../media-processing
+      '@futsmandu/media-storage':
+        specifier: workspace:*
+        version: link:../media-storage
+      '@futsmandu/queues':
+        specifier: workspace:*
+        version: link:../queues
+      '@futsmandu/utils':
+        specifier: workspace:*
+        version: link:../utils
+      '@nestjs/bullmq':
+        specifier: ^11.0.2
+        version: 11.0.4(@nestjs/common@11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.18(@nestjs/common@11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(bullmq@5.73.0)
+      '@nestjs/common':
+        specifier: ^11.0.11
+        version: 11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core':
+        specifier: '>=10.0.0'
+        version: 11.1.18(@nestjs/common@11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      bullmq:
+        specifier: ^5.34.8
+        version: 5.73.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+
+  packages/media-core:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+
+  packages/media-processing:
+    dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1024.0
+        version: 3.1024.0
+      '@futsmandu/database':
+        specifier: workspace:*
+        version: link:../database
+      '@futsmandu/media-core':
+        specifier: workspace:*
+        version: link:../media-core
+      '@futsmandu/media-storage':
+        specifier: workspace:*
+        version: link:../media-storage
+      '@futsmandu/queues':
+        specifier: workspace:*
+        version: link:../queues
+      '@nestjs/bullmq':
+        specifier: ^11.0.2
+        version: 11.0.4(@nestjs/common@11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.18(@nestjs/common@11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(bullmq@5.73.0)
+      '@nestjs/common':
+        specifier: ^11.0.11
+        version: 11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core':
+        specifier: '>=10.0.0'
+        version: 11.1.18(@nestjs/common@11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      bullmq:
+        specifier: ^5.34.8
+        version: 5.73.0
+      sharp:
+        specifier: ^0.33.5
+        version: 0.33.5
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+
+  packages/media-storage:
+    dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.600.0
+        version: 3.1024.0
+      '@aws-sdk/s3-request-presigner':
+        specifier: ^3.600.0
+        version: 3.1024.0
+      '@futsmandu/media-core':
+        specifier: workspace:*
+        version: link:../media-core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
 
   packages/queues:
     dependencies:
@@ -2425,8 +2557,8 @@ packages:
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
-  baseline-browser-mapping@2.10.14:
-    resolution: {integrity: sha512-fOVLPAsFTsQfuCkvahZkzq6nf8KvGWanlYoTh0SVA0A/PIUxQGU2AOZAoD95n2gFLVDW/jP6sbGLny95nmEuHA==}
+  baseline-browser-mapping@2.10.15:
+    resolution: {integrity: sha512-1nfKCq9wuAZFTkA2ey/3OXXx7GzFjLdkTiFVNwlJ9WqdI706CZRIhEqjuwanjMIja+84jDLa9rcyZDPDiVkASQ==}
     engines: {node: '>=6.0.0'}
     hasBin: true
 
@@ -2698,6 +2830,11 @@ packages:
   dotenv-expand@12.0.3:
     resolution: {integrity: sha512-uc47g4b+4k/M/SeaW1y4OApx+mtLWl92l5LMPP0GNXctZqELk+YGgOPIIC5elYmUH4OuoK3JLhuRUYegeySiFA==}
     engines: {node: '>=12'}
+
+  dotenv-safe@9.1.0:
+    resolution: {integrity: sha512-2qwVAnUN+EDpu41pIK1XiJpHXKHV9Dnti3cE1EnUXT1/BV5+B7xuSZtgZ/4LExkCpp5F6BGikraezQL+8hKCOA==}
+    peerDependencies:
+      dotenv: '>= 8.2.0'
 
   dotenv@16.6.1:
     resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
@@ -3513,6 +3650,9 @@ packages:
     resolution: {integrity: sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw==}
     engines: {node: '>=10'}
 
+  package-json-from-dist@1.0.1:
+    resolution: {integrity: sha512-UEZIS3/by4OC8vL3P2dTXRETpebLI2NiI5vIrjaD/5UtrkFX/tNbwjTSRAGC/+7CAo2pIcBaRgWmcBBHcsaCIw==}
+
   parent-module@1.0.1:
     resolution: {integrity: sha512-GQ2EWRpQV8/o+Aw8YqtfZZPfNRWZYkbidE9k5rpl/hC3vtHHBfGm2Ifi6qWV+coDGkrUKZAxE3Lot5kcsRlh+g==}
     engines: {node: '>=6'}
@@ -3750,6 +3890,11 @@ packages:
 
   rfdc@1.4.1:
     resolution: {integrity: sha512-q1b3N5QkRUWUl7iyylaaj3kOpIT0N2i9MqIEQXP73GVsN9cw3fdx8X63cEmWhJGi2PPCF23Ijp7ktmd39rawIA==}
+
+  rimraf@6.1.3:
+    resolution: {integrity: sha512-LKg+Cr2ZF61fkcaK1UdkH2yEBBKnYjTyWzTJT6KNPcSPaiT7HSdhtMXQuN5wkTX0Xu72KQ1l8S42rlmexS2hSA==}
+    engines: {node: 20 || >=22}
+    hasBin: true
 
   rxjs@7.8.1:
     resolution: {integrity: sha512-AA3TVj+0A2iuIoQkWEK/tqFjBq2j+6PO6Y0zJcvzLAFhEFIO3HL0vls9hWLncZbAAbK0mar7oZ4V079I/qPMxg==}
@@ -6601,7 +6746,7 @@ snapshots:
 
   base64-js@1.5.1: {}
 
-  baseline-browser-mapping@2.10.14: {}
+  baseline-browser-mapping@2.10.15: {}
 
   bcryptjs@2.4.3: {}
 
@@ -6626,7 +6771,7 @@ snapshots:
 
   browserslist@4.28.2:
     dependencies:
-      baseline-browser-mapping: 2.10.14
+      baseline-browser-mapping: 2.10.15
       caniuse-lite: 1.0.30001785
       electron-to-chromium: 1.5.331
       node-releases: 2.0.37
@@ -6866,6 +7011,10 @@ snapshots:
   dotenv-expand@12.0.3:
     dependencies:
       dotenv: 16.6.1
+
+  dotenv-safe@9.1.0(dotenv@17.4.0):
+    dependencies:
+      dotenv: 17.4.0
 
   dotenv@16.6.1: {}
 
@@ -7843,6 +7992,8 @@ snapshots:
     dependencies:
       p-limit: 3.1.0
 
+  package-json-from-dist@1.0.1: {}
+
   parent-module@1.0.1:
     dependencies:
       callsites: 3.1.0
@@ -8091,6 +8242,11 @@ snapshots:
   reusify@1.1.0: {}
 
   rfdc@1.4.1: {}
+
+  rimraf@6.1.3:
+    dependencies:
+      glob: 13.0.6
+      package-json-from-dist: 1.0.1
 
   rxjs@7.8.1:
     dependencies:
