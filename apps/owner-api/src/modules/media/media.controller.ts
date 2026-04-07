@@ -1,9 +1,11 @@
 // apps/owner-api/src/modules/media/media.controller.ts
-import {
-  Controller, Post, Delete, Get, Body, Param, Query, UseGuards,
-} from '@nestjs/common'
+// Thin controller — zero business logic. All logic lives in @futsmandu/media.
+// REPLACES the old media.controller.ts that had hardcoded paths.
+
+import { Controller, Post, Delete, Body, Query, UseGuards, Param, ParseUUIDPipe } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
-import { MediaService } from './media.service.js'
+import { MediaService } from '@futsmandu/media'
+import { RequestUploadUrlDto, ConfirmUploadDto, DeleteAssetDto, OwnerKycUploadUrlDto } from '../../dto/media.dto.js'
 import { OwnerJwtGuard } from '../../common/guards/owner-jwt.guard.js'
 import { CurrentOwner } from '../../common/decorators/current-owner.decorator.js'
 
@@ -14,49 +16,89 @@ import { CurrentOwner } from '../../common/decorators/current-owner.decorator.js
 export class MediaController {
   constructor(private readonly media: MediaService) {}
 
-  @Post('venues/:venueId/cover-upload-url')
-  @ApiOperation({ summary: 'Get presigned URL to upload venue cover image to R2' })
-  getVenueCoverUrl(
+  @Post('upload-url')
+  @ApiOperation({ summary: 'Request presigned R2 upload URL (venue images, KYC docs, owner profile)' })
+  requestUploadUrl(
     @CurrentOwner() owner: { id: string },
-    @Param('venueId') venueId: string,
+    @Body() dto: RequestUploadUrlDto,
   ) {
-    return this.media.getVenueCoverUploadUrl(owner.id, venueId)
-  }
-
-  @Post('venues/:venueId/gallery-upload-url')
-  @ApiOperation({ summary: 'Get presigned URL to upload venue gallery image to R2' })
-  getVenueGalleryUrl(
-    @CurrentOwner() owner: { id: string },
-    @Param('venueId') venueId: string,
-  ) {
-    return this.media.getVenueGalleryUploadUrl(owner.id, venueId)
-  }
-
-  @Post('documents/upload-url')
-  @ApiOperation({ summary: 'Get presigned URL to upload KYC verification document (private)' })
-  getDocumentUrl(
-    @CurrentOwner() owner: { id: string },
-    @Body('docType') docType: string,
-  ) {
-    return this.media.getDocumentUploadUrl(owner.id, docType)
+    return this.media.requestUploadUrl({
+      assetType: dto.assetType,
+      ownerId:   owner.id,
+      entityId:  dto.entityId,
+      docType:   dto.docType,
+    })
   }
 
   @Post('confirm-upload')
-  @ApiOperation({ summary: 'Confirm R2 upload complete — triggers Sharp resize job' })
+  @ApiOperation({ summary: 'Confirm R2 upload complete — triggers image processing job' })
   confirmUpload(
-    @Body('key') key: string,
-    @Body('width') width = 1280,
-    @Body('height') height = 720,
+    @CurrentOwner() owner: { id: string },
+    @Body() dto: ConfirmUploadDto,
   ) {
-    return this.media.confirmUpload(key, width, height)
+    return this.media.confirmUpload({
+      ownerId:   owner.id,
+      key:       dto.key,
+      assetType: dto.assetType,
+    } as any)
   }
 
-  @Delete('object')
-  @ApiOperation({ summary: 'Delete an R2 asset (venue images only)' })
-  deleteObject(
+  @Post('kyc/upload-url')
+  @ApiOperation({ summary: 'Get presigned URL for owner KYC document upload' })
+  requestKycUploadUrl(
     @CurrentOwner() owner: { id: string },
-    @Query('key') key: string,
+    @Body() dto: OwnerKycUploadUrlDto,
   ) {
-    return this.media.deleteObject(owner.id, key)
+    return this.media.requestUploadUrl({
+      assetType: 'kyc_document',
+      ownerId: owner.id,
+      entityId: owner.id,
+      docType: dto.docType,
+    })
+  }
+
+  @Post('venues/:venueId/images/cover/upload-url')
+  @ApiOperation({ summary: 'Get presigned URL for venue cover image upload' })
+  requestVenueCoverUploadUrl(
+    @CurrentOwner() owner: { id: string },
+    @Param('venueId', ParseUUIDPipe) venueId: string,
+  ) {
+    return this.media.requestUploadUrl({
+      assetType: 'venue_cover',
+      ownerId: owner.id,
+      entityId: venueId,
+    })
+  }
+
+  @Post('venues/:venueId/images/gallery/upload-url')
+  @ApiOperation({ summary: 'Get presigned URL for venue gallery image upload' })
+  requestVenueGalleryUploadUrl(
+    @CurrentOwner() owner: { id: string },
+    @Param('venueId', ParseUUIDPipe) venueId: string,
+  ) {
+    return this.media.requestUploadUrl({
+      assetType: 'venue_gallery',
+      ownerId: owner.id,
+      entityId: venueId,
+    })
+  }
+
+  @Post('profile/avatar/upload-url')
+  @ApiOperation({ summary: 'Get presigned URL for owner avatar upload' })
+  requestOwnerAvatarUploadUrl(@CurrentOwner() owner: { id: string }) {
+    return this.media.requestUploadUrl({
+      assetType: 'owner_profile',
+      ownerId: owner.id,
+      entityId: owner.id,
+    })
+  }
+
+  @Delete('asset')
+  @ApiOperation({ summary: 'Delete an R2 asset you own' })
+  deleteAsset(
+    @CurrentOwner() owner: { id: string },
+    @Query() dto: DeleteAssetDto,
+  ) {
+    return this.media.deleteAsset(dto.assetId, owner.id)
   }
 }
