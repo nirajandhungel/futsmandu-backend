@@ -15,6 +15,7 @@ COPY packages/database/package.json  ./packages/database/
 COPY packages/redis/package.json     ./packages/redis/
 COPY packages/auth/package.json      ./packages/auth/
 COPY packages/logger/package.json    ./packages/logger/
+COPY packages/media/package.json     ./packages/media/
 COPY packages/types/package.json     ./packages/types/
 COPY packages/utils/package.json     ./packages/utils/
 COPY apps/admin-api/package.json     ./apps/admin-api/
@@ -25,6 +26,7 @@ RUN npm ci \
     --workspace=packages/redis \
     --workspace=packages/auth \
     --workspace=packages/logger \
+    --workspace=packages/media \
     --workspace=packages/types \
     --workspace=packages/utils \
     --include-workspace-root \
@@ -39,6 +41,7 @@ COPY apps/admin-api/ ./apps/admin-api/
 # No || true — build failures must be loud.
 RUN npm run build --workspace=packages/types
 RUN npm run build --workspace=packages/logger
+RUN npm run build --workspace=packages/media
 RUN npm run build --workspace=packages/redis
 RUN npm run build --workspace=packages/database
 RUN npm run build --workspace=packages/auth

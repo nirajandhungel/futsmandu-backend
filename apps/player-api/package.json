@@ -19,6 +19,8 @@
     "@futsmandu/auth": "workspace:*",
     "@futsmandu/database": "workspace:*",
     "@futsmandu/logger": "workspace:*",
+    "@futsmandu/media": "workspace:*",
+    "@futsmandu/media-core": "workspace:*",
     "@futsmandu/queues": "workspace:*",
     "@futsmandu/redis": "workspace:*",
     "@futsmandu/types": "workspace:*",

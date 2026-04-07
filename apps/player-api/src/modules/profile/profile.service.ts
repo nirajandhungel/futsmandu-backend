@@ -1,22 +1,15 @@
-// CHANGED: [L-6 lazy S3Client initialization instead of module-load-time instantiation]
-// NEW ISSUES FOUND:
-//   - S3Client instantiated at module load with process.env — crashes container at startup
-//     if CF_ACCOUNT_ID is missing, even if the upload feature is never called
-
 // apps/player-api/src/modules/profile/profile.service.ts
-// L-6: S3Client created lazily inside getAvatarUploadUrl() so missing R2 env vars
-//      do not crash the entire container — they only fail the specific upload call.
+// CHANGED: Removed all inline S3/R2 logic (getAvatarUploadUrl was duplicating owner-api).
+// Now delegates to @futsmandu/media MediaService.
 
-import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common'
+import { Injectable, NotFoundException } from '@nestjs/common'
 import {
   IsBoolean, IsEnum, IsOptional, IsString,
   MaxLength, MinLength, IsArray,
 } from 'class-validator'
 import { Transform } from 'class-transformer'
 import { PrismaService } from '@futsmandu/database'
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { ENV } from '@futsmandu/utils'
+import { MediaService } from '@futsmandu/media'
 
 export class UpdateProfileDto {
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
@@ -35,7 +28,10 @@ export class UpdateProfileDto {
 
 @Injectable()
 export class ProfileService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly media: MediaService,   // ← injected from @futsmandu/media
+  ) {}
 
   async getOwn(userId: string) {
     const user = await this.prisma.users.findUnique({
@@ -86,8 +82,8 @@ export class ProfileService {
       return tx.users.update({
         where: { id: userId },
         data: {
-          ...(dto.name              !== undefined ? { name:               dto.name }               : {}),
-          ...(dto.skill_level       !== undefined ? { skill_level:        dto.skill_level }        : {}),
+          ...(dto.name               !== undefined ? { name:               dto.name }               : {}),
+          ...(dto.skill_level        !== undefined ? { skill_level:        dto.skill_level }        : {}),
           ...(dto.show_match_history !== undefined ? { show_match_history: dto.show_match_history } : {}),
           updated_at: new Date(),
         },
@@ -99,43 +95,32 @@ export class ProfileService {
     })
   }
 
-  // L-6: S3Client created lazily here so a missing CF_ACCOUNT_ID does not crash
-  //      the container on startup — it only fails this specific endpoint.
+  // ── Profile image upload ─────────────────────────────────────────────────
+  // Delegates entirely to shared MediaService — no S3 code here.
+  // Returns uploadUrl + key. Client PUTs to uploadUrl, then calls confirm-upload.
   async getAvatarUploadUrl(userId: string) {
-    const accountId      = ENV['CF_ACCOUNT_ID']
-    const accessKeyId    = ENV['R2_ACCESS_KEY_ID']
-    const secretAccessKey = ENV['R2_SECRET_ACCESS_KEY']
-    const bucketName     = ENV['R2_BUCKET_NAME']
-    const cdnBase        = ENV['R2_CDN_BASE_URL']
-
-    if (!accountId || !accessKeyId || !secretAccessKey || !bucketName || !cdnBase) {
-      throw new InternalServerErrorException(
-        'R2 storage is not configured — contact platform support',
-      )
-    }
-
-    // Lazy client: created per-invocation; no module-load-time env access
-    const r2 = new S3Client({
-      region: 'auto',
-      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-      credentials: { accessKeyId, secretAccessKey },
+    return this.media.requestUploadUrl({
+      assetType: 'player_profile',
+      ownerId:   userId,
+      entityId:  userId,
     })
+  }
 
-    const key = `avatars/${userId}.jpg`
-    const cmd = new PutObjectCommand({
-      Bucket: bucketName,
-      Key: key,
-      ContentType: 'image/jpeg',
-      CacheControl: 'public, max-age=3600',
-    })
-    const uploadUrl = await getSignedUrl(r2, cmd, { expiresIn: 600 })
-    const cdnUrl    = `${cdnBase}/${key}`
+  async confirmAvatarUpload(userId: string, key: string) {
+    const result = await this.media.confirmUpload({
+      ownerId: userId,
+      key,
+      assetType: 'player_profile',
+    } as any)
 
+    // After confirming, update the user's profile_image_url to the CDN URL.
+    // We store the KEY, then derive the CDN URL dynamically.
+    const cdnUrl = this.media.getCdnUrl(key)
     await this.prisma.users.update({
       where: { id: userId },
-      data: { profile_image_url: cdnUrl, updated_at: new Date() },
+      data:  { profile_image_url: cdnUrl, updated_at: new Date() },
     })
 
-    return { uploadUrl, cdnUrl, instructions: 'PUT image to uploadUrl, then cdnUrl becomes active' }
+    return result
   }
 }

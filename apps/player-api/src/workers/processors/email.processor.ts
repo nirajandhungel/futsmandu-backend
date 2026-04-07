@@ -33,15 +33,21 @@ export class EmailProcessor extends WorkerHost {
       'booking-confirmation': 'Your Futsmandu booking is confirmed ✅',
       'verification-email':   'Verify your Futsmandu email',
       'password-reset':       'Reset your Futsmandu password',
+      FRIEND_ADDED_TO_MATCH:  'You were added to a match ⚽',
     }
 
     const subject = subjects[type] ?? `Futsmandu — ${type}`
+    const html = String(type) === 'FRIEND_ADDED_TO_MATCH'
+      ? `<p>Hi ${name || 'there'},</p>
+         <p>You've been added to ${String(data?.['adminName'] ?? 'a friend')}'s match at ${String(data?.['venueName'] ?? 'a venue')} on ${String(data?.['date'] ?? '')} at ${String(data?.['startTime'] ?? '')}. See you on the pitch!</p>
+         <p><a href="${String(data?.['matchGroupId'] ?? '')}">Open match details</a></p>`
+      : `<p>Hi ${name || 'there'},</p><p>${JSON.stringify(data)}</p>`
 
     const { error } = await resend.emails.send({
       from: 'Futsmandu <noreply@futsmandu.app>',
       to,
       subject,
-      html: `<p>Hi ${name || 'there'},</p><p>${JSON.stringify(data)}</p>`,
+      html,
     })
 
     if (error) throw new Error(`Resend error for ${type}: ${JSON.stringify(error)}`)

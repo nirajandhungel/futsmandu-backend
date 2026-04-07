@@ -1,8 +1,10 @@
 // apps/player-api/src/modules/profile/profile.controller.ts
+// CHANGED: Added POST /profile/avatar/confirm endpoint for the new 2-step upload flow.
+
 import {
   Controller, Get, Put, Post, Body, Param, ParseUUIDPipe, HttpCode, HttpStatus,
 } from '@nestjs/common'
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger'
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
 import { ProfileService, UpdateProfileDto } from './profile.service.js'
 import { CurrentUser, Public } from '@futsmandu/auth'
 import type { AuthenticatedUser } from '@futsmandu/types'
@@ -30,9 +32,22 @@ export class ProfileController {
     return this.profileService.getPublic(userId)
   }
 
-  @Post('avatar')
+  // Step 1: Request presigned upload URL
+  @Post('avatar/upload-url')
   @HttpCode(HttpStatus.OK)
-  avatarUrl(@CurrentUser() u: AuthenticatedUser) {
+  @ApiOperation({ summary: 'Step 1 — Get presigned R2 URL to upload profile image' })
+  avatarUploadUrl(@CurrentUser() u: AuthenticatedUser) {
     return this.profileService.getAvatarUploadUrl(u.id)
+  }
+
+  // Step 2: Confirm upload complete
+  @Post('avatar/confirm')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Step 2 — Confirm avatar upload, triggers resize job' })
+  avatarConfirm(
+    @CurrentUser() u: AuthenticatedUser,
+    @Body('key') key: string,
+  ) {
+    return this.profileService.confirmAvatarUpload(u.id, key)
   }
 }

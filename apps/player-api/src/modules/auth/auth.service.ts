@@ -19,7 +19,7 @@ import {
 import { JwtService } from '@nestjs/jwt'
 import { InjectQueue } from '@nestjs/bullmq'
 import { Queue } from 'bullmq'
-import * as bcrypt from 'bcryptjs'
+import  bcrypt from 'bcryptjs'
 import { PrismaService } from '@futsmandu/database'
 import type { JwtPayload } from '@futsmandu/types'
 import type { RegisterDto, LoginDto } from './dto/auth.dto.js'
