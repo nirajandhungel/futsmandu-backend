@@ -12,10 +12,9 @@ export type AssetType =
 export type AssetStatus = 'pending' | 'processing' | 'ready' | 'failed'
 
 export type KycDocType =
-  | 'nid_front'
-  | 'nid_back'
+  | 'citizenship'
   | 'business_registration'
-  | 'tax_certificate'
+  | 'business_pan'
 
 // Whether the asset should be accessible publicly via CDN
 export const PUBLIC_ASSET_TYPES: AssetType[] = [
