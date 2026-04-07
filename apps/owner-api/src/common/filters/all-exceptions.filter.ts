@@ -7,7 +7,11 @@ import { ENV } from '@futsmandu/utils'
 
 interface PrismaError extends Error {
   code?: string
+  meta?: Record<string, unknown>
 }
+
+// Prisma emits this message when a non-UUID string reaches a UUID column.
+const UUID_ERROR_RE = /inconsistent column data|invalid character.*uuid|error creating uuid/i
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -40,6 +44,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
     if (prismaErr?.code === 'P2025') {
       void reply.status(404).send({ error: 'Record not found', code: 'NOT_FOUND', statusCode: 404 })
+      return
+    }
+    // P2023 — malformed UUID / inconsistent column data (e.g. venueId = "invalid")
+    if (
+      prismaErr?.code === 'P2023' ||
+      UUID_ERROR_RE.test(prismaErr?.message ?? '')
+    ) {
+      void reply.status(400).send({ error: 'Invalid ID format — must be a valid UUID', code: 'INVALID_ID', statusCode: 400 })
       return
     }
 
