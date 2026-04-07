@@ -17,6 +17,7 @@ import { IpWhitelistMiddleware }   from './common/middleware/ip-whitelist.middle
 import { AdminAuthModule }         from './modules/admin-auth/admin-auth.module.js'
 import { AdminUsersModule }        from './modules/admin-users/admin-users.module.js'
 import { AdminVenuesModule }       from './modules/admin-venues/admin-venues.module.js'
+import { AdminBookingModule }      from './modules/admin-booking/admin-booking.module.js'
 import { AdminPenaltiesModule }    from './modules/admin-penalties/admin-penalties.module.js'
 import { AdminModerationModule }   from './modules/admin-moderation/admin-moderation.module.js'
 import { AdminAnalyticsModule }    from './modules/analytics/analytics.module.js'
@@ -50,6 +51,7 @@ import { ENV } from '@futsmandu/utils'
     AdminAuthModule,
     AdminUsersModule,
     AdminVenuesModule,
+    AdminBookingModule,
     AdminPenaltiesModule,
     AdminModerationModule,
     AdminAnalyticsModule,
