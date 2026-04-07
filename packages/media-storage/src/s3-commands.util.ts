@@ -67,6 +67,47 @@ export async function objectExistsInStorage(
   }
 }
 
+export interface StorageObjectMetadata {
+  contentType?: string
+  contentLength?: number
+  lastModified?: Date
+}
+
+export async function getStorageObjectMetadata(
+  config: StorageConfig,
+  key: string
+): Promise<StorageObjectMetadata> {
+  const out = await config.s3Client.send(new HeadObjectCommand({
+    Bucket: config.bucket,
+    Key: key,
+  }))
+
+  return {
+    contentType: out.ContentType,
+    contentLength: out.ContentLength,
+    lastModified: out.LastModified,
+  }
+}
+
+export async function downloadStorageObjectBuffer(
+  config: StorageConfig,
+  key: string
+): Promise<Buffer> {
+  const out = await config.s3Client.send(new GetObjectCommand({
+    Bucket: config.bucket,
+    Key: key,
+  }))
+  if (!out.Body) {
+    throw new Error(`Empty storage object body for key: ${key}`)
+  }
+
+  const chunks: Uint8Array[] = []
+  for await (const chunk of out.Body as AsyncIterable<Uint8Array>) {
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
 export function formatCdnUrl(cdnBaseUrl: string, key: string): string {
   // Ensure no double slashes if cdnBaseUrl has trailing slash
   const base = cdnBaseUrl.endsWith('/') ? cdnBaseUrl.slice(0, -1) : cdnBaseUrl;
