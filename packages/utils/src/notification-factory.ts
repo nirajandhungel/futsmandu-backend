@@ -32,6 +32,34 @@ export class NotificationFactory {
           data: { matchGroupId: String(ctx['matchGroupId']), screen: 'MatchDetail' },
           sendSms: false,
         }
+      case 'MATCH_JOIN_REQUEST':
+        return {
+          title: '⚽ New join request',
+          body: `${String(ctx['playerName'] ?? 'A player')} requested to join your match.`,
+          data: { matchGroupId: String(ctx['matchGroupId']), requestId: String(ctx['requestId']), screen: 'MatchRequests' },
+          sendSms: false,
+        }
+      case 'MATCH_JOIN_ACCEPTED':
+        return {
+          title: '✅ Join request accepted',
+          body: 'You are in! See match details and teammates.',
+          data: { matchGroupId: String(ctx['matchGroupId']), screen: 'MatchDetail' },
+          sendSms: false,
+        }
+      case 'MATCH_JOIN_REJECTED':
+        return {
+          title: '❌ Join request declined',
+          body: 'Your request was not accepted this time.',
+          data: { matchGroupId: String(ctx['matchGroupId']), screen: 'Matches' },
+          sendSms: false,
+        }
+      case 'FRIEND_ADDED_TO_MATCH':
+        return {
+          title: '🤝 Added to a match',
+          body: `${String(ctx['adminName'])} added you to a match at ${String(ctx['venueName'])}.`,
+          data: { matchGroupId: String(ctx['matchGroupId']), screen: 'MatchDetail' },
+          sendSms: false,
+        }
       case 'FRIEND_REQUEST':
         return {
           title: '🤝 Friend Request',
