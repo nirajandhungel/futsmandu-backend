@@ -5,7 +5,7 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { OwnerAuthService } from './owner-auth.service.js'
-import { RegisterOwnerDto, LoginOwnerDto, UploadDocDto } from './dto/owner-auth.dto.js'
+import { RegisterOwnerDto, LoginOwnerDto, UploadDocDto, VerifyOtpDto, ResendOtpDto } from './dto/owner-auth.dto.js'
 import { OwnerJwtGuard, Public } from '../../common/guards/owner-jwt.guard.js'
 import { CurrentOwner } from '../../common/decorators/current-owner.decorator.js'
 import type { AuthOwner } from '../../common/guards/owner-jwt.guard.js'
@@ -40,6 +40,24 @@ export class OwnerAuthController {
     const result = await this.ownerAuth.login(dto)
     void res.setCookie(REFRESH_COOKIE, result.refreshToken, COOKIE_OPTS)
     return { accessToken: result.accessToken, owner: result.owner }
+  }
+
+  @Public()
+  @Post('verify-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify OTP and complete email verification' })
+  async verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.ownerAuth.verifyOtp(dto.ownerId, dto.otp)
+  }
+
+  @Public()
+  @Post('resend-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resend OTP to email with rate limiting' })
+  async resendOtp(@Body() dto: ResendOtpDto, @Req() req: FastifyRequest) {
+    const ip = req.ip
+    const userAgent = req.headers['user-agent']
+    return this.ownerAuth.resendOtp(dto.ownerId, dto.email, ip, userAgent)
   }
 
   @Public()
