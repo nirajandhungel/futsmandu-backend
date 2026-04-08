@@ -107,15 +107,8 @@ export class AdminAuthService {
 
   // ── Resend OTP ────────────────────────────────────────────────────────────
   // Resend OTP with rate limiting
-  async resendOtp(adminId: string, email: string, ipAddress?: string, userAgent?: string) {
-    const admin = await this.prisma.admins.findUnique({
-      where: { id: adminId },
-      select: { id: true, email: true },
-    })
-    if (!admin) throw new UnauthorizedException('Admin not found')
-    if (!admin.email) throw new UnauthorizedException('No email found for admin')
-
-    return this.otpService.resendOtp(adminId, 'admin', admin.email, ipAddress, userAgent)
+  async resendOtp(adminId: string, ipAddress?: string, userAgent?: string): Promise<{ success: boolean; message: string }> {
+    return this.otpService.resendOtp(adminId, 'admin', ipAddress, userAgent)
   }
 
   // Admin sessions: 8h access tokens for dashboard use

@@ -39,10 +39,10 @@ export class AdminAuthController {
   @Post('resend-otp')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resend OTP to email with rate limiting' })
-  async resendOtp(@Body() dto: ResendOtpDto, @Req() req: FastifyRequest) {
+  async resendOtp(@Body() dto: ResendOtpDto, @Req() req: FastifyRequest): Promise<{ success: boolean; message: string }> {
     const ip = req.ip
     const userAgent = req.headers['user-agent']
-    return this.adminAuth.resendOtp(dto.adminId, dto.email, ip, userAgent)
+    return this.adminAuth.resendOtp(dto.adminId, ip, userAgent)
   }
 
   @AdminPublic()

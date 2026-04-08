@@ -54,10 +54,10 @@ export class OwnerAuthController {
   @Post('resend-otp')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Resend OTP to email with rate limiting' })
-  async resendOtp(@Body() dto: ResendOtpDto, @Req() req: FastifyRequest) {
+  async resendOtp(@Body() dto: ResendOtpDto, @Req() req: FastifyRequest): Promise<{ success: boolean; message: string }> {
     const ip = req.ip
     const userAgent = req.headers['user-agent']
-    return this.ownerAuth.resendOtp(dto.ownerId, dto.email, ip, userAgent)
+    return this.ownerAuth.resendOtp(dto.ownerId, ip, userAgent)
   }
 
   @Public()

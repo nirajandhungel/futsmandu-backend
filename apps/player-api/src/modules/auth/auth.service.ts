@@ -132,15 +132,8 @@ export class AuthService {
 
   // ── Resend OTP ────────────────────────────────────────────────────────────
   // Resend OTP with rate limiting
-  async resendOtp(userId: string, email: string, ipAddress?: string, userAgent?: string) {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { id: true, email: true },
-    })
-    if (!user) throw new UnauthorizedException('User not found')
-    if (!user.email) throw new UnauthorizedException('No email found for user')
-
-    return this.otpService.resendOtp(userId, 'player', user.email, ipAddress, userAgent)
+  async resendOtp(userId: string, ipAddress?: string, userAgent?: string): Promise<{ success: boolean; message: string }> {
+    return this.otpService.resendOtp(userId, 'player', ipAddress, userAgent)
   }
 
   // ── Forgot Password ───────────────────────────────────────────────────────

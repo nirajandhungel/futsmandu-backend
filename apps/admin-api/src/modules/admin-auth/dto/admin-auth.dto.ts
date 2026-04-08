@@ -28,9 +28,4 @@ export class ResendOtpDto {
   @ApiProperty({ description: 'Admin ID', format: 'uuid' })
   @IsUUID('4')
   adminId!: string
-
-  @ApiProperty({ description: 'Admin email', example: 'admin@example.com' })
-  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
-  @IsEmail()
-  email!: string
 }

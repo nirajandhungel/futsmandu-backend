@@ -101,10 +101,10 @@ export class AuthController {
   async resendOtp(
     @Body() dto: ResendOtpDto,
     @Req() req: FastifyRequest,
-  ) {
+  ): Promise<{ success: boolean; message: string }> {
     const ip = req.ip
     const userAgent = req.headers['user-agent']
-    return this.authService.resendOtp(dto.userId, dto.email, ip, userAgent)
+    return this.authService.resendOtp(dto.userId, ip, userAgent)
   }
 
   @Public()

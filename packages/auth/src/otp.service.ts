@@ -20,6 +20,11 @@ export interface VerifyOtpResult {
   verified_at?: Date
 }
 
+export interface ResendOtpResult {
+  success: boolean
+  message: string
+}
+
 @Injectable()
 export class OtpService {
   private readonly logger = new Logger(OtpService.name)
@@ -81,6 +86,9 @@ export class OtpService {
       }
 
       this.logger.debug(`OTP generated for ${userType} ${userId}`)
+      if (ENV['NODE_ENV'] === 'development') {
+        this.logger.debug(`Dev OTP for ${userType} ${userId}: ${otp}`)
+      }
       return result
     } catch (err) {
       this.logger.error(`Failed to generate OTP for ${userType} ${userId}:`, err)
@@ -106,15 +114,15 @@ export class OtpService {
         orderBy: { created_at: 'desc' },
       })
 
-      // OTP not found or expired
+      // OTP not found, expired, or already invalidated
       if (!otpRecord) {
         return {
           success: false,
-          message: 'OTP expired or not found. Request a new one.',
+          message: 'Invalid or expired OTP',
         }
       }
 
-      // Check attempt limit
+      // OTP has already reached maximum failed attempts
       if (otpRecord.attempts >= otpRecord.max_attempts) {
         await this.prisma.email_verification_otps.update({
           where: { id: otpRecord.id },
@@ -122,12 +130,12 @@ export class OtpService {
         })
         return {
           success: false,
-          message: 'Too many failed attempts. Request a new OTP.',
+          message: 'Invalid or expired OTP',
         }
       }
 
       // Increment attempt counter
-      await this.prisma.email_verification_otps.update({
+      const updatedOtpRecord = await this.prisma.email_verification_otps.update({
         where: { id: otpRecord.id },
         data: { attempts: { increment: 1 } },
       })
@@ -136,9 +144,15 @@ export class OtpService {
       const isValid = this.constantTimeCompare(otp, otpRecord.otp)
 
       if (!isValid) {
+        if (updatedOtpRecord.attempts >= updatedOtpRecord.max_attempts) {
+          await this.prisma.email_verification_otps.update({
+            where: { id: otpRecord.id },
+            data: { expires_at: new Date() },
+          })
+        }
         return {
           success: false,
-          message: `Invalid OTP. ${otpRecord.max_attempts - otpRecord.attempts} attempts remaining.`,
+          message: 'Invalid or expired OTP',
         }
       }
 
@@ -182,27 +196,53 @@ export class OtpService {
   async resendOtp(
     userId: string,
     userType: 'player' | 'owner' | 'admin',
-    email: string,
     ipAddress?: string,
     userAgent?: string,
-  ): Promise<GenerateOtpResult> {
+  ): Promise<ResendOtpResult> {
     try {
-      // Check rate limit: max 3 resends per 5 minutes
+      const user = await (async () => {
+        if (userType === 'player') {
+          return this.prisma.users.findUnique({
+            where: { id: userId },
+            select: { email: true, is_verified: true },
+          })
+        }
+        if (userType === 'owner') {
+          return this.prisma.owners.findUnique({
+            where: { id: userId },
+            select: { email: true, is_verified: true },
+          })
+        }
+        return this.prisma.admins.findUnique({
+          where: { id: userId },
+          select: { email: true, is_verified: true },
+        })
+      })()
+
+      if (!user || !user.email || user.is_verified) {
+        throw new BadRequestException('Unable to resend OTP')
+      }
+
+      // Check rate limit: max 3 resends per hour
       const recentOtps = await this.prisma.email_verification_otps.findMany({
         where: {
           [userType === 'player' ? 'player_id' : userType === 'owner' ? 'owner_id' : 'admin_id']: userId,
-          created_at: { gt: new Date(Date.now() - 5 * 60 * 1000) }, // Last 5 minutes
+          created_at: { gt: new Date(Date.now() - 60 * 60 * 1000) }, // Last 60 minutes
         },
       })
 
       if (recentOtps.length >= 3) {
         throw new BadRequestException(
-          'Too many resend requests. Please wait 5 minutes before trying again.',
+          'Too many resend requests. Please wait before trying again.',
         )
       }
 
-      // Generate and send new OTP
-      return this.generateOtp(userId, userType, email, ipAddress, userAgent)
+      await this.generateOtp(userId, userType, user.email, ipAddress, userAgent)
+
+      return {
+        success: true,
+        message: 'A new OTP has been sent to your registered email.',
+      }
     } catch (err) {
       this.logger.error(`Failed to resend OTP for ${userType} ${userId}:`, err)
       throw err

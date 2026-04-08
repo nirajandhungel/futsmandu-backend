@@ -184,15 +184,8 @@ export class OwnerAuthService {
 
   // ── Resend OTP ────────────────────────────────────────────────────────────
   // Resend OTP with rate limiting
-  async resendOtp(ownerId: string, email: string, ipAddress?: string, userAgent?: string) {
-    const owner = await this.prisma.owners.findUnique({
-      where: { id: ownerId },
-      select: { id: true, email: true },
-    })
-    if (!owner) throw new UnauthorizedException('Owner not found')
-    if (!owner.email) throw new UnauthorizedException('No email found for owner')
-
-    return this.otpService.resendOtp(ownerId, 'owner', owner.email, ipAddress, userAgent)
+  async resendOtp(ownerId: string, ipAddress?: string, userAgent?: string): Promise<{ success: boolean; message: string }> {
+    return this.otpService.resendOtp(ownerId, 'owner', ipAddress, userAgent)
   }
 
   // ── Token helpers ─────────────────────────────────────────────────────────
