@@ -7,7 +7,7 @@ import { IsString } from 'class-validator'
 import { ApiProperty } from '@nestjs/swagger'
 import type { FastifyRequest } from 'fastify'
 import { AdminAuthService } from './admin-auth.service.js'
-import { AdminLoginDto } from './dto/admin-auth.dto.js'
+import { AdminLoginDto, VerifyOtpDto, ResendOtpDto } from './dto/admin-auth.dto.js'
 import { AdminPublic } from '../../common/guards/admin-jwt.guard.js'
 
 class RefreshAdminDto {
@@ -25,6 +25,24 @@ export class AdminAuthController {
   @ApiOperation({ summary: 'Admin login — returns 8h access token' })
   login(@Body() dto: AdminLoginDto) {
     return this.adminAuth.login(dto)
+  }
+
+  @AdminPublic()
+  @Post('verify-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify OTP and complete email verification' })
+  async verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.adminAuth.verifyOtp(dto.adminId, dto.otp)
+  }
+
+  @AdminPublic()
+  @Post('resend-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resend OTP to email with rate limiting' })
+  async resendOtp(@Body() dto: ResendOtpDto, @Req() req: FastifyRequest) {
+    const ip = req.ip
+    const userAgent = req.headers['user-agent']
+    return this.adminAuth.resendOtp(dto.adminId, dto.email, ip, userAgent)
   }
 
   @AdminPublic()
