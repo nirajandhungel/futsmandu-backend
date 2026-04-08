@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt'
 import { OwnerAuthController } from './owner-auth.controller.js'
 import { OwnerAuthService } from './owner-auth.service.js'
 import { OwnerJwtGuard } from '../../common/guards/owner-jwt.guard.js'
+import { OtpService } from '@futsmandu/auth'
 import { ENV } from '@futsmandu/utils'
 import { QueuesModule } from '@futsmandu/queues'
 
@@ -15,7 +16,7 @@ import { QueuesModule } from '@futsmandu/queues'
     QueuesModule,
   ],
   controllers: [OwnerAuthController],
-  providers: [OwnerAuthService, OwnerJwtGuard],
+  providers: [OwnerAuthService, OtpService, OwnerJwtGuard],
   exports: [JwtModule, OwnerJwtGuard],
 })
 export class OwnerAuthModule {}
