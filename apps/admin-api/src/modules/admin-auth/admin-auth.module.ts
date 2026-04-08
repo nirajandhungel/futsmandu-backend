@@ -4,10 +4,11 @@ import { Module } from '@nestjs/common'
 import { AdminAuthController } from './admin-auth.controller.js'
 import { AdminAuthService } from './admin-auth.service.js'
 import { AdminJwtGuard } from '../../common/guards/admin-jwt.guard.js'
+import { OtpService } from '@futsmandu/auth'
 
 @Module({
   controllers: [AdminAuthController],
-  providers: [AdminAuthService, AdminJwtGuard],
+  providers: [AdminAuthService, OtpService, AdminJwtGuard],
   exports: [AdminJwtGuard],
 })
 export class AdminAuthModule {}
