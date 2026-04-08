@@ -7,10 +7,11 @@ import {
 import { JwtService } from '@nestjs/jwt'
 import bcrypt from 'bcryptjs'
 import { PrismaService } from '@futsmandu/database'
+import { OtpService } from '@futsmandu/auth'
 import type { AdminLoginDto } from './dto/admin-auth.dto.js'
 import { ENV } from '@futsmandu/utils'
 
-const DUMMY_HASH = '$2b$12$placeholder_hash_for_timing_safety_never_matches_any_pw'
+const DUMMY_HASH = '$2b$12$kQzFv6Y8WzWjR4o4Fh9J1Oe7gVqM0k7vR9HcU0n6eXvJbAqZ9e9dK'
 
 interface AdminJwtPayload {
   sub:   string
@@ -26,8 +27,9 @@ export class AdminAuthService {
   private readonly logger = new Logger(AdminAuthService.name)
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly jwt:    JwtService,
+    private readonly prisma:     PrismaService,
+    private readonly jwt:        JwtService,
+    private readonly otpService: OtpService,
   ) {}
 
   async login(dto: AdminLoginDto) {
@@ -39,6 +41,7 @@ export class AdminAuthService {
         email: true,
         password_hash: true,
         is_active: true,
+        is_verified: true,
         role: true,
       },
     })
@@ -50,6 +53,7 @@ export class AdminAuthService {
 
     if (!admin || !valid) throw new UnauthorizedException('Invalid credentials')
     if (!admin.is_active) throw new ForbiddenException('Account deactivated')
+    if (!admin.is_verified) throw new ForbiddenException('Please verify your email first before logging in')
 
     const adminRole = admin?.role
     if (!adminRole || !['ADMIN', 'SUPER_ADMIN'].includes(adminRole)) {
@@ -93,6 +97,25 @@ export class AdminAuthService {
     return {
       accessToken: this.signAdminAccess(admin.id, admin.email, adminRole),
     }
+  }
+
+  // ── Verify OTP ────────────────────────────────────────────────────────────
+  // Verify OTP for admin email verification
+  async verifyOtp(adminId: string, otp: string) {
+    return this.otpService.verifyOtp(adminId, 'admin', otp)
+  }
+
+  // ── Resend OTP ────────────────────────────────────────────────────────────
+  // Resend OTP with rate limiting
+  async resendOtp(adminId: string, email: string, ipAddress?: string, userAgent?: string) {
+    const admin = await this.prisma.admins.findUnique({
+      where: { id: adminId },
+      select: { id: true, email: true },
+    })
+    if (!admin) throw new UnauthorizedException('Admin not found')
+    if (!admin.email) throw new UnauthorizedException('No email found for admin')
+
+    return this.otpService.resendOtp(adminId, 'admin', admin.email, ipAddress, userAgent)
   }
 
   // Admin sessions: 8h access tokens for dashboard use
