@@ -55,6 +55,11 @@ export const ENV = {
   SPARROW_SMS_TOKEN:        process.env['SPARROW_SMS_TOKEN']         as string,
   RESEND_API_KEY:            process.env['RESEND_API_KEY']            as string,
 
+  // ── OTP (Email Verification) ───────────────────────────────────────────────
+  OTP_EXPIRY_MINUTES: parseInt(process.env['OTP_EXPIRY_MINUTES'] ?? '10', 10),
+  OTP_MAX_ATTEMPTS:   parseInt(process.env['OTP_MAX_ATTEMPTS'] ?? '5', 10),
+  OTP_LENGTH:         parseInt(process.env['OTP_LENGTH'] ?? '6', 10),
+
   // ── App ───────────────────────────────────────────────────────────────────
   APP_URL:           process.env['APP_URL']           as string,
   ADMIN_ALLOWED_IPS: process.env['ADMIN_ALLOWED_IPS'] as string,

@@ -49,5 +49,8 @@ node_modules/.cache/
 **/seed-admin.ts
 **/*.rest
 **/*guide.md
+**/*guide.md.pdf
+
+
 
 /.pnpm-store

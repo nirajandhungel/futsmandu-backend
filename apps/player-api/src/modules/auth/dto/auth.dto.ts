@@ -8,7 +8,7 @@
 // apps/player-api/src/modules/auth/dto/auth.dto.ts
 import {
   IsEmail, IsString, MinLength, MaxLength, Matches,
-  IsNotEmpty,
+  IsNotEmpty, IsUUID,
 } from 'class-validator'
 import { Transform } from 'class-transformer'
 import { ApiProperty } from '@nestjs/swagger'
@@ -64,4 +64,23 @@ export class ResetPasswordDto {
 export class VerifyEmailDto {
   @IsString() @IsNotEmpty() @MinLength(6) @MaxLength(256)
   token!: string
+}
+
+// ── OTP Verification DTOs ────────────────────────────────────────────────────
+
+export class VerifyOtpDto {
+  @ApiProperty({ description: 'User ID', format: 'uuid' })
+  @IsUUID('4')
+  userId!: string
+
+  @ApiProperty({ description: '6-digit OTP code', example: '123456' })
+  @IsString() @IsNotEmpty()
+  @Matches(/^\d{6,10}$/, { message: 'OTP must be 6-10 digits' })
+  otp!: string
+}
+
+export class ResendOtpDto {
+  @ApiProperty({ description: 'User ID', format: 'uuid' })
+  @IsUUID('4')
+  userId!: string
 }

@@ -7,7 +7,7 @@
 // apps/owner-admin-api/src/modules/owner-auth/dto/owner-auth.dto.ts
 import {
   IsEmail, IsString, IsNotEmpty, MinLength, MaxLength,
-  IsOptional, IsIn, Matches,
+  IsOptional, IsIn, Matches, IsUUID,
 } from 'class-validator'
 import { Transform } from 'class-transformer'
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
@@ -61,4 +61,23 @@ export class UploadDocDto {
   @ApiProperty({ enum: ['citizenship', 'pan', 'business_reg', 'other'] })
   @IsIn(['citizenship', 'pan', 'business_reg', 'other'])
   docType!: string
+}
+
+// ── OTP Verification DTOs ────────────────────────────────────────────────────
+
+export class VerifyOtpDto {
+  @ApiProperty({ description: 'Owner ID', format: 'uuid' })
+  @IsUUID('4')
+  ownerId!: string
+
+  @ApiProperty({ description: '6-digit OTP code', example: '123456' })
+  @IsString() @IsNotEmpty()
+  @Matches(/^\d{6,10}$/, { message: 'OTP must be 6-10 digits' })
+  otp!: string
+}
+
+export class ResendOtpDto {
+  @ApiProperty({ description: 'Owner ID', format: 'uuid' })
+  @IsUUID('4')
+  ownerId!: string
 }

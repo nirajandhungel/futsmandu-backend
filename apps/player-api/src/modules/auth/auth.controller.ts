@@ -16,7 +16,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { AuthService } from './auth.service.js'
 import {
   RegisterDto, LoginDto, ForgotPasswordDto,
-  ResetPasswordDto, VerifyEmailDto,
+  ResetPasswordDto, VerifyEmailDto, VerifyOtpDto, ResendOtpDto,
 } from './dto/auth.dto.js'
 import { Public } from '@futsmandu/auth'
 import { ENV } from '@futsmandu/utils'
@@ -79,6 +79,32 @@ export class AuthController {
     const result = await this.authService.login(dto)
     void reply.setCookie('refreshToken', result.refreshToken, COOKIE_OPTS)
     return { accessToken: result.accessToken, user: result.user }
+  }
+
+  @Public()
+  @Post('verify-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify OTP and complete email verification' })
+  async verifyOtp(
+    @Body() dto: VerifyOtpDto,
+    @Req() req: FastifyRequest,
+  ) {
+    const ip = req.ip
+    const userAgent = req.headers['user-agent']
+    return this.authService.verifyOtp(dto.userId, dto.otp)
+  }
+
+  @Public()
+  @Post('resend-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resend OTP to email with rate limiting' })
+  async resendOtp(
+    @Body() dto: ResendOtpDto,
+    @Req() req: FastifyRequest,
+  ): Promise<{ success: boolean; message: string }> {
+    const ip = req.ip
+    const userAgent = req.headers['user-agent']
+    return this.authService.resendOtp(dto.userId, ip, userAgent)
   }
 
   @Public()

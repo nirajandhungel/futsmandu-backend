@@ -178,6 +178,7 @@ model users {
   sent_join_requests   match_join_requests[]   @relation("JoinRequester")
   responded_requests   match_join_requests[]   @relation("JoinResponder")
   invited_match_members match_group_members[]  @relation("InvitedBy")
+  email_otps          email_verification_otps[] @relation("PlayerOtps")
 
   @@index([email])
   @@index([phone])
@@ -203,12 +204,14 @@ model admins {
   name          String
   role          admin_role @default(ADMIN)
   is_active     Boolean    @default(true)
+  is_verified   Boolean    @default(false)
 
   createdAt DateTime @default(now()) @db.Timestamptz
   updatedAt DateTime @updatedAt @db.Timestamptz
 
   kycApprovals    owners[] @relation("AdminKycApprovals")
   venueApprovals  venues[] @relation("AdminVenueApprovals")
+  email_otps      email_verification_otps[] @relation("AdminOtps")
 }
 
 // ── Owners ───────────────────────────────────────────────────────────────────
@@ -235,7 +238,8 @@ model owners {
   created_at        DateTime @default(now()) @db.Timestamptz
   updated_at        DateTime @updatedAt @db.Timestamptz
 
-  venues venues[]
+  venues     venues[]
+  email_otps email_verification_otps[] @relation("OwnerOtps")
 }
 
 // ── Venues & Courts ──────────────────────────────────────────────────────────
@@ -608,4 +612,44 @@ model admin_audit_log {
 
   @@index([admin_id, created_at(sort: Desc)])
   @@index([target_id, target_type])
+}
+
+// ── Email Verification OTPs ──────────────────────────────────────────────────
+// OTP-based email verification for users, owners, and admins.
+// One-time use, self-destructing after verification or expiry.
+// Rate limiting: max 5 verification attempts per OTP, max 3 resend per 5 minutes.
+
+model email_verification_otps {
+  id              String   @id @default(cuid())
+  
+  // User type: 'player', 'owner', or 'admin'
+  user_type       String   @db.VarChar(20)
+  
+  // Foreign keys (one will be set based on user_type)
+  player_id       String?  @db.Uuid
+  owner_id        String?  @db.Uuid
+  admin_id        String?  @db.Uuid
+  
+  email           String   // Store email for convenience and rate limiting
+  otp             String   @db.VarChar(10) // 6-10 digit OTP
+  ip_address      String? // For rate limiting and security audit
+  user_agent      String? // For fraud detection
+  
+  attempts        Int      @default(0)
+  max_attempts    Int      @default(5)
+  
+  created_at      DateTime @default(now()) @db.Timestamptz
+  expires_at      DateTime @db.Timestamptz
+  verified_at     DateTime? @db.Timestamptz
+
+  player          users?   @relation("PlayerOtps", fields: [player_id], references: [id], onDelete: Cascade)
+  owner           owners?  @relation("OwnerOtps", fields: [owner_id], references: [id], onDelete: Cascade)
+  admin           admins?  @relation("AdminOtps", fields: [admin_id], references: [id], onDelete: Cascade)
+
+  @@index([email])
+  @@index([player_id])
+  @@index([owner_id])
+  @@index([admin_id])
+  @@index([expires_at])
+  @@index([verified_at])
 }

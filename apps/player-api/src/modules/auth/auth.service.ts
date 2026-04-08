@@ -1,17 +1,3 @@
-// CHANGED: [C-2 refresh_token_version, H-6 password-reset token fingerprint, L-1 remove email from refresh JWT]
-// NEW ISSUES FOUND:
-//   - signRefresh embedded email: '' in JWT payload (L-1) — unnecessary field removed
-//   - forgotPassword token had no password_hash fingerprint — reusable within 1h window (H-6)
-//   - refresh() did not validate token version against DB — replay attack possible (C-2)
-
-// apps/player-api/src/modules/auth/auth.service.ts
-// Authentication service — registration, login, token rotation, password reset.
-// Access token: 15m JWT in response body.
-// Refresh token: 7d JWT in HTTP-only Secure cookie, rotated on every use.
-// C-2: refresh_token_version embedded in refresh JWT; DB version checked on every rotation.
-// H-6: Password reset token embeds last-8-chars of password_hash as fingerprint;
-//      changing the password invalidates all outstanding reset tokens for that account.
-
 import {
   Injectable, ConflictException, UnauthorizedException,
   ForbiddenException, Logger,
@@ -23,9 +9,10 @@ import  bcrypt from 'bcryptjs'
 import { PrismaService } from '@futsmandu/database'
 import type { JwtPayload } from '@futsmandu/types'
 import type { RegisterDto, LoginDto } from './dto/auth.dto.js'
+import { OtpService } from '@futsmandu/auth'
 import { ENV } from '@futsmandu/utils'
 
-const DUMMY_HASH = '$2b$12$placeholder_hash_for_timing_safety_never_matches_any_pw'
+const DUMMY_HASH = '$2b$12$9z1Kq4xN0k5cE7Qjv1f6iO5qv6q2u1oXn8lTQv9P1YtFz7p0uQJ7G'
 
 @Injectable()
 export class AuthService {
@@ -34,10 +21,12 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
+    private readonly otpService: OtpService,
     @InjectQueue('player-emails') private readonly emailQueue: Queue,
   ) {}
 
   // ── Register ──────────────────────────────────────────────────────────────
+  // Updated to NOT auto-verify; OTP required before login
   async register(dto: RegisterDto) {
     const existing = await this.prisma.users.findFirst({
       where: { OR: [{ email: dto.email }, { phone: dto.phone }] },
@@ -52,22 +41,22 @@ export class AuthService {
     const password_hash = await bcrypt.hash(dto.password, 12)
 
     const user = await this.prisma.users.create({
-      data: { name: dto.name, email: dto.email, phone: dto.phone, password_hash },
-      select: { id: true, name: true, email: true, phone: true, created_at: true },
+      data: {
+        name: dto.name,
+        email: dto.email,
+        phone: dto.phone,
+        password_hash,
+        is_verified: false, // Not verified until OTP is submitted
+      },
+      select: { id: true, name: true, email: true, phone: true, created_at: true, is_verified: true },
     })
 
-    await this.emailQueue
-      .add(
-        'verification-email',
-        { type: 'verification-email', to: user.email, name: user.name, data: { userId: user.id } },
-        { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
-      )
-      .catch((e: unknown) => this.logger.error('Failed to enqueue verification email', e))
+    // Generate and send OTP immediately after registration
+    await this.otpService.generateOtp(user.id, 'player', user.email)
 
     return user
   }
-
-  // ── Login ─────────────────────────────────────────────────────────────────
+// Updated: Check is_verified before issuing tokens
   async login(dto: LoginDto) {
     const user = await this.prisma.users.findUnique({
       where: { email: dto.email },
@@ -83,6 +72,9 @@ export class AuthService {
       ? await bcrypt.compare(dto.password, user.password_hash)
       : await bcrypt.compare(dto.password, DUMMY_HASH)
 
+    if (!user || !validPassword) throw new UnauthorizedException('Invalid email or password')
+    if (!user.is_active) throw new ForbiddenException('Account deactivated')
+    if (!user.is_verified) throw new ForbiddenException('Please verify your email first before logging in')
     if (!user || !validPassword) throw new UnauthorizedException('Invalid email or password')
     if (!user.is_active) throw new ForbiddenException('Account deactivated')
 
@@ -130,6 +122,18 @@ export class AuthService {
       accessToken:  this.signAccess(user.id, user.email),
       refreshToken: this.signRefresh(user.id, updated.refresh_token_version),
     }
+  }
+
+  // ── Verify OTP ────────────────────────────────────────────────────────────
+  // Verify OTP and mark user as email-verified
+  async verifyOtp(userId: string, otp: string) {
+    return this.otpService.verifyOtp(userId, 'player', otp)
+  }
+
+  // ── Resend OTP ────────────────────────────────────────────────────────────
+  // Resend OTP with rate limiting
+  async resendOtp(userId: string, ipAddress?: string, userAgent?: string): Promise<{ success: boolean; message: string }> {
+    return this.otpService.resendOtp(userId, 'player', ipAddress, userAgent)
   }
 
   // ── Forgot Password ───────────────────────────────────────────────────────

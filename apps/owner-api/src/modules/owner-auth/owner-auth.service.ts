@@ -13,9 +13,10 @@ import { PrismaService } from '@futsmandu/database'
 import type { Prisma } from '@futsmandu/database'
 import type { JwtPayload } from '@futsmandu/types'
 import type { RegisterOwnerDto, LoginOwnerDto } from './dto/owner-auth.dto.js'
+import { OtpService } from '@futsmandu/auth'
 import { ENV } from '@futsmandu/utils'
 
-const DUMMY_HASH = '$2b$12$placeholder_hash_for_timing_safety_never_matches_any_pw'
+const DUMMY_HASH = '$2b$12$kQzFv6Y8WzWjR4o4Fh9J1Oe7gVqM0k7vR9HcU0n6eXvJbAqZ9e9dK'
 
 @Injectable()
 export class OwnerAuthService {
@@ -24,10 +25,12 @@ export class OwnerAuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
+    private readonly otpService: OtpService,
     @InjectQueue('owner-emails') private readonly emailQueue: Queue,
   ) {}
 
   // ── Register ──────────────────────────────────────────────────────────────
+  // Updated to NOT auto-verify; OTP required before login
   async register(dto: RegisterOwnerDto) {
     const existing = await this.prisma.owners.findFirst({
       where: { OR: [{ email: dto.email }, { phone: dto.phone }] },
@@ -46,25 +49,22 @@ export class OwnerAuthService {
         phone:         dto.phone,
         password_hash,
         business_name: dto.business_name,
+        is_verified:   false, // Not verified until OTP is submitted
       },
       select: {
         id: true, name: true, email: true,
-        phone: true, business_name: true, created_at: true,
+        phone: true, business_name: true, created_at: true, is_verified: true,
       },
     })
 
-    await this.emailQueue
-      .add(
-        'owner-welcome',
-        { type: 'owner-welcome', to: owner.email, name: owner.name, data: { ownerId: owner.id } },
-        { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
-      )
-      .catch((e: unknown) => this.logger.error('Failed to enqueue welcome email', e))
+    // Generate and send OTP immediately after registration
+    await this.otpService.generateOtp(owner.id, 'owner', owner.email)
 
     return owner
   }
 
   // ── Login ─────────────────────────────────────────────────────────────────
+  // Updated: Check is_verified before issuing tokens
   async login(dto: LoginOwnerDto) {
     const owner = await this.prisma.owners.findUnique({
       where: { email: dto.email },
@@ -84,6 +84,9 @@ export class OwnerAuthService {
     }
     if (!owner.is_active) {
       throw new ForbiddenException('Account deactivated. Contact support.')
+    }
+    if (!owner.is_verified) {
+      throw new ForbiddenException('Please verify your email first before logging in')
     }
 
     const { password_hash: _pw, ...safeOwner } = owner
@@ -171,6 +174,18 @@ export class OwnerAuthService {
     })
 
     return { uploadUrl, key }
+  }
+
+  // ── Verify OTP ────────────────────────────────────────────────────────────
+  // Verify OTP and mark owner as email-verified
+  async verifyOtp(ownerId: string, otp: string) {
+    return this.otpService.verifyOtp(ownerId, 'owner', otp)
+  }
+
+  // ── Resend OTP ────────────────────────────────────────────────────────────
+  // Resend OTP with rate limiting
+  async resendOtp(ownerId: string, ipAddress?: string, userAgent?: string): Promise<{ success: boolean; message: string }> {
+    return this.otpService.resendOtp(ownerId, 'owner', ipAddress, userAgent)
   }
 
   // ── Token helpers ─────────────────────────────────────────────────────────
