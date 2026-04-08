@@ -33,9 +33,9 @@
     ]
   },
   "scripts": {
-    "clean": "find . -type d \\( -name 'node_modules' -o -name 'dist' \\) -not -path './.git/*' -exec rm -rf {} + 2>/dev/null; find . \\( -name '*.tsbuildinfo' -o -name '*.log' \\) -not -path './.git/*' -delete 2>/dev/null; echo '✅ Cleaned node_modules, dist, tsbuildinfo, logs'",
-    "clean:deep": "pnpm run clean && npx -y rimraf pnpm-lock.yaml && echo '💣 Deep clean complete — run pnpm install to reinstall.'",
-    "setup": "pnpm install && node scripts/validate-env.mjs && pnpm prisma:generate && pnpm prisma:push && pnpm run build && echo '✨ Project Setup Complete. Run pnpm dev:all ✨'",
+    "clean": "echo '🧹 Deep cleaning project...' && find . -type d \\( -name 'node_modules' -o -name 'dist' -o -name '.turbo' \\) -not -path './.git/*' -exec rm -rf {} + 2>/dev/null || true && find . \\( -name '*.tsbuildinfo' -o -name '*.log' -o -name '.env.local' \\) -not -path './.git/*' -delete 2>/dev/null || true && echo '✅ Cleaned all node_modules, dist, .turbo, tsbuildinfo, logs, and temp files'",
+    "clean:deep": "pnpm run clean && echo '💣 Removing lockfile...' && npx -y rimraf pnpm-lock.yaml && echo '✅ Deep clean complete — run pnpm install'",
+    "setup": "echo '🚀 Setting up project...' && echo '📦 Installing dependencies...' && pnpm install --frozen-lockfile && echo '📝 Validating environment...' && node scripts/validate-env.mjs && echo '🔄 Generating Prisma client...' && pnpm prisma:generate && echo '🛠️ Building packages...' && pnpm run build:packages && echo '💾 Syncing database schema...' && pnpm prisma:push && echo '🏗️ Building apps...' && pnpm run build:apps && echo '✨ Setup complete! Run pnpm dev:all to start development servers'",
     "reset": "pnpm run clean:deep && pnpm run setup",
     "bootstrap": "pnpm docker:up && pnpm run setup",
     "build": "pnpm build:packages && pnpm build:apps",
