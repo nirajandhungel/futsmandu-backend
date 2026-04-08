@@ -155,8 +155,10 @@ export class BookingLifecycleService {
       const meta = (booking.booking_meta ?? {}) as BookingMeta
       const maxPlayers = meta.maxPlayers ?? court?.capacity ?? 10
       const minPlayers = meta.requiredPlayers ?? court?.min_players ?? 4
-      const joinMode = meta.joinMode ?? 'INVITE_ONLY'
-      const costSplitMode = meta.costSplitMode ?? 'ADMIN_PAYS_ALL'
+
+      const isFlexOrPartial = meta.bookingType === 'FLEX' || meta.bookingType === 'PARTIAL';
+      const effectiveJoinMode = isFlexOrPartial ? 'OPEN' : (meta.joinMode ?? 'INVITE_ONLY');
+      const effectiveSplitMode = isFlexOrPartial ? 'SPLIT_EQUAL' : (meta.costSplitMode ?? 'ADMIN_PAYS_ALL');
 
       const matchGroup = await tx.match_groups.create({
         data: {
@@ -169,9 +171,10 @@ export class BookingLifecycleService {
           admin_id: confirmed.player_id!,
           max_players: maxPlayers,
           min_players: minPlayers,
-          is_open: joinMode !== 'INVITE_ONLY',
-          join_mode: joinMode,
-          cost_split_mode: costSplitMode,
+          is_open: effectiveJoinMode !== 'INVITE_ONLY',
+          join_mode: effectiveJoinMode,
+          auto_accept: isFlexOrPartial,
+          cost_split_mode: effectiveSplitMode,
           description: meta.description ?? null,
           slots_available: Math.max(maxPlayers - 1, 0),
         },

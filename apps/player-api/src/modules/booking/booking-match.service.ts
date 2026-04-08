@@ -12,6 +12,94 @@ export class BookingMatchService {
     @InjectQueue('player-emails') private readonly emailQueue: Queue,
   ) {}
 
+  async joinBookingSlot(bookingId: string, playerId: string, position?: string) {
+    const booking = await this.prisma.bookings.findUnique({
+      where: { id: bookingId },
+      select: {
+        status: true,
+        match_group: { select: { id: true, is_open: true, slots_available: true } },
+      },
+    })
+
+    if (!booking) throw new NotFoundException('Booking not found')
+    if (booking.status !== 'CONFIRMED') throw new ConflictException(`Booking is ${booking.status}`)
+    if (!booking.match_group) throw new ConflictException('Booking does not have an open match yet')
+    if (!booking.match_group.is_open) throw new ConflictException('Booking is not open for joining')
+    if (booking.match_group.slots_available < 1) throw new ConflictException('Booking is full')
+
+    return this.joinMatch(booking.match_group.id, playerId, position)
+  }
+
+  async joinMatch(matchId: string, playerId: string, position?: string) {
+    const matchPrecheck = await this.prisma.match_groups.findUnique({
+      where: { id: matchId },
+      select: { is_open: true, skill_filter: true, auto_accept: true, admin_id: true },
+    })
+    if (!matchPrecheck) throw new NotFoundException('Match not found')
+    if (!matchPrecheck.is_open) throw new ForbiddenException('Match is not open for joining')
+
+    if (matchPrecheck.skill_filter) {
+      const user = await this.prisma.users.findUnique({
+        where: { id: playerId },
+        select: { skill_level: true },
+      })
+      if (user?.skill_level !== matchPrecheck.skill_filter) {
+        throw new ForbiddenException(`Match requires ${matchPrecheck.skill_filter} skill`)
+      }
+    }
+
+    const result = await this.prisma.$transaction(async (tx: any) => {
+      const [lockedMatch] = await tx.$queryRaw<Array<{
+        id: string; max_players: number; is_open: boolean; auto_accept: boolean; admin_id: string
+      }>>`SELECT id, max_players, is_open, auto_accept, admin_id
+          FROM match_groups WHERE id = ${matchId}::uuid FOR UPDATE`
+
+      if (!lockedMatch) throw new NotFoundException('Match not found')
+      if (!lockedMatch.is_open) throw new ForbiddenException('Match is no longer open')
+
+      const existing = await tx.match_group_members.findUnique({
+        where: { match_group_id_user_id: { match_group_id: matchId, user_id: playerId } },
+        select: { id: true },
+      })
+      if (existing) throw new ConflictException('Already in match')
+
+      const confirmedCount = await tx.match_group_members.count({
+        where: { match_group_id: matchId, status: 'confirmed' },
+      })
+      if (confirmedCount >= lockedMatch.max_players) throw new ConflictException('Match is full')
+
+      const status = lockedMatch.auto_accept ? 'confirmed' : 'pending'
+      const member = await tx.match_group_members.create({
+        data: {
+          match_group_id: matchId,
+          user_id: playerId,
+          status,
+          position: (position as 'goalkeeper' | 'defender' | 'midfielder' | 'striker' | null) ?? null,
+        },
+      })
+
+      const updatedCount = status === 'confirmed' ? confirmedCount + 1 : confirmedCount
+      await tx.match_groups.update({
+        where: { id: matchId },
+        data: { slots_available: Math.max(lockedMatch.max_players - updatedCount, 0) },
+      })
+
+      return { member, autoAccepted: lockedMatch.auto_accept, adminId: lockedMatch.admin_id }
+    }, { isolationLevel: 'RepeatableRead', maxWait: 3000, timeout: 10000 })
+
+    if (!result.member.status || result.member.status === 'pending') {
+      await this.notifQueue
+        .add(
+          'match-join-request',
+          { type: 'MATCH_INVITE', userId: result.adminId, data: { matchGroupId: matchId } },
+          { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
+        )
+        .catch(() => null)
+    }
+
+    return result.member
+  }
+
   async requestJoinMatch(playerId: string, dto: RequestJoinDto) {
     const match = await this.prisma.match_groups.findUnique({
       where: { id: dto.matchGroupId },

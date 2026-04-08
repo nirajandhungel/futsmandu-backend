@@ -23,6 +23,7 @@ export class BookingService {
   getSlotGrid(courtId: string, date: string) { return this.lifecycle.getSlotGrid(courtId, date) }
   getBookings(playerId: string, query: BookingQueryDto) { return this.lifecycle.getBookings(playerId, query) }
   getBooking(bookingId: string, playerId: string) { return this.lifecycle.getBooking(bookingId, playerId) }
+  joinBookingSlot(bookingId: string, playerId: string, position?: string) { return this.matchFlow.joinBookingSlot(bookingId, playerId, position) }
 
   requestJoinMatch(playerId: string, dto: RequestJoinDto) { return this.matchFlow.requestJoinMatch(playerId, dto) }
   respondToJoinRequest(adminId: string, dto: RespondJoinRequestDto) { return this.matchFlow.respondToJoinRequest(adminId, dto) }
