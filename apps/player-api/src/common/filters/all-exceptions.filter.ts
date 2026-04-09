@@ -12,18 +12,10 @@ import {
   HttpException, Logger,
 } from '@nestjs/common'
 import type { FastifyReply } from 'fastify'
-import * as Sentry from '@sentry/node'
+import * as Sentry from '@sentry/nestjs'
+import { SentryExceptionCaptured } from '@sentry/nestjs'
 import { ENV } from '@futsmandu/utils'
 
-// L-3: Sentry is initialised once when this module is first imported.
-// SENTRY_DSN must be set in .env — validated at startup in main.ts.
-if (ENV['SENTRY_DSN']) {
-  Sentry.init({
-    dsn: ENV['SENTRY_DSN'],
-    environment: ENV['NODE_ENV'] ?? 'development',
-    tracesSampleRate: ENV['NODE_ENV'] === 'production' ? 0.1 : 1.0,
-  })
-}
 
 interface PrismaError extends Error {
   code?: string
@@ -34,6 +26,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name)
   private readonly isProd = ENV['NODE_ENV'] === 'production'
 
+  @SentryExceptionCaptured()
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx   = host.switchToHttp()
     const reply = ctx.getResponse<FastifyReply>()
@@ -75,10 +68,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return
     }
 
-    // ── Unknown errors — capture to Sentry ───────────────────────────────
-    if (ENV['SENTRY_DSN'] && exception instanceof Error) {
-      Sentry.captureException(exception)
-    }
+    // ── Unknown errors — logging ───────────────────────────────
+    // Note: @SentryExceptionCaptured() decorator on the catch() method 
+    // handles the actual reporting of unhandled exceptions to Sentry.
+    // It respects the ignoreErrors and beforeSend filters defined in instrument.ts.
 
     this.logger.error(
       'Unhandled exception',

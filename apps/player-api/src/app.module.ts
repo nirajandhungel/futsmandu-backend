@@ -9,9 +9,10 @@
 // QueuesModule owns all BullMQ queue registrations — feature modules import it.
 
 import { Module } from '@nestjs/common'
-import { ConfigModule } from '@nestjs/config'
+import { ConfigModule, ConfigService } from '@nestjs/config'
 import { JwtModule } from '@nestjs/jwt'
 import { ThrottlerModule } from '@nestjs/throttler'
+import { SentryModule } from '@sentry/nestjs/setup'
 
 import { PrismaModule } from '@futsmandu/database'
 import { RedisModule } from '@futsmandu/redis'
@@ -35,6 +36,8 @@ import { ENV } from '@futsmandu/utils'
       envFilePath: ['.env', '../../.env'],
       cache: true,
     }),
+
+    SentryModule.forRoot(),
 
     PrismaModule,
     RedisModule,
@@ -60,6 +63,13 @@ import { ENV } from '@futsmandu/utils'
     NotificationModule,
     ProfileModule,
     HealthModule,
+  ],
+  providers: [
+    {
+      provide: 'SENTRY_DSN',
+      useFactory: (config: ConfigService) => config.get<string>('SENTRY_DSN'),
+      inject: [ConfigService],
+    },
   ],
 })
 export class AppModule {}

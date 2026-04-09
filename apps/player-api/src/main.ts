@@ -1,3 +1,6 @@
+// IMPORTANT: Sentry instrumentation must be imported before any other module
+import './instrument.js'
+
 // CHANGED: [L-4 startup env validation, L-3 Sentry init via filter, SanitizePipe registration]
 // NEW ISSUES FOUND:
 //   - No startup validation of critical env vars — missing secrets caused cryptic runtime crashes
@@ -132,12 +135,30 @@ async function bootstrap(): Promise<void> {
   logger.log(`   Environment: ${ENV['NODE_ENV']}`)
   logger.log(`   DB pool size per instance: ${ENV['DB_POOL_SIZE'] ?? 5}`)
 
+  // Log S3/MinIO connection status
+  const s3Endpoint = ENV['S3_ENDPOINT']
+  const s3Bucket = ENV['S3_BUCKET']
+  if (s3Endpoint && s3Bucket) {
+    const isMinIO = s3Endpoint.includes('localhost') || s3Endpoint.includes('127.0.0.1')
+    logger.log(`🪣 ${isMinIO ? 'MinIO' : 'S3'} connected: ${s3Endpoint} → ${s3Bucket}`)
+  } else {
+    logger.warn(`🪣 S3/MinIO not configured — media uploads disabled`)
+  }
+
+  // Log Sentry status
+  if (ENV['SENTRY_DSN']) {
+    logger.log(`🐛 Sentry enabled: ${ENV['SENTRY_ENVIRONMENT']} (${ENV['SENTRY_RELEASE']})`)
+  } else {
+    logger.warn(`🐛 Sentry disabled — no DSN configured`)
+  }
+
   const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT']
   for (const signal of signals) {
     process.on(signal, async () => {
-      logger.log(`${signal} received — shutting down`)
+      logger.log(`${signal} received — shutting down player-api gracefully`)
       markRedisShuttingDown()
       await app.close()
+      logger.log(`✅ Player API shutdown complete`)
       process.exit(0)
     })
   }
