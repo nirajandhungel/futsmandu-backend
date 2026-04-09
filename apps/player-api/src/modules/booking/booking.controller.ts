@@ -63,6 +63,14 @@ export class BookingController {
     return this.bookingService.holdSlot(user.id, dto)
   }
 
+  // POST /bookings/:id/join
+  @Post('bookings/:id/join')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Join an open slot in an existing booking' })
+  joinBookingSlot(@Param('id', ParseUUIDPipe) bookingId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.bookingService.joinBookingSlot(bookingId, user.id)
+  }
+
   // GET /bookings
   // SEC-2: Typed DTO with @Type(() => Number) prevents string arithmetic bugs
   @Get('bookings')
