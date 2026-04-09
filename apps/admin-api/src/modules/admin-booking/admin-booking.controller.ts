@@ -63,13 +63,6 @@ class ListBookingsQueryDto {
   search?: string
 }
 
-class CancelBookingByAdminDto {
-  @ApiPropertyOptional({ maxLength: 500 })
-  @IsOptional()
-  @IsString()
-  @MaxLength(500)
-  reason?: string
-}
 
 class BookingOverviewQueryDto {
   @ApiPropertyOptional({ example: '2026-04-01' })
@@ -108,19 +101,4 @@ export class AdminBookingController {
     return this.adminBooking.getOverview(query)
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Get booking detail' })
-  detail(@Param('id') bookingId: string) {
-    return this.adminBooking.getBookingDetail(bookingId)
-  }
-
-  @Put(':id/cancel')
-  @ApiOperation({ summary: 'Cancel booking as admin' })
-  cancel(
-    @CurrentAdmin() admin: AuthAdmin,
-    @Param('id') bookingId: string,
-    @Body() dto: CancelBookingByAdminDto,
-  ) {
-    return this.adminBooking.cancelBooking(admin.id, bookingId, dto.reason)
-  }
 }
