@@ -6,9 +6,10 @@
 // BullMQ: emails + admin-alerts queues (no notifications/sms/image queues).
 
 import { Module, MiddlewareConsumer, NestModule, RequestMethod } from '@nestjs/common'
-import { ConfigModule } from '@nestjs/config'
+import { ConfigModule, ConfigService } from '@nestjs/config'
 import { JwtModule } from '@nestjs/jwt'
 import { ThrottlerModule } from '@nestjs/throttler'
+import { SentryModule } from '@sentry/nestjs/setup'
 
 import { PrismaModule } from '@futsmandu/database'
 import { QueuesModule } from '@futsmandu/queues'
@@ -33,6 +34,8 @@ import { ENV } from '@futsmandu/utils'
       cache: true,
     }),
 
+    SentryModule.forRoot(),
+
     PrismaModule,
 
     // Admin JWT — 8h sessions, separate secret from owner and player
@@ -56,6 +59,13 @@ import { ENV } from '@futsmandu/utils'
     AdminModerationModule,
     AdminAnalyticsModule,
     AdminHealthModule,
+  ],
+  providers: [
+    {
+      provide: 'SENTRY_DSN',
+      useFactory: (config: ConfigService) => config.get<string>('SENTRY_DSN'),
+      inject: [ConfigService],
+    },
   ],
 })
 export class AppModule implements NestModule {
