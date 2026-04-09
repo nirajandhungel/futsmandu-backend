@@ -6,9 +6,10 @@
 
 import { Module } from '@nestjs/common'
 import { APP_GUARD } from '@nestjs/core'
-import { ConfigModule } from '@nestjs/config'
+import { ConfigModule, ConfigService } from '@nestjs/config'
 import { JwtModule } from '@nestjs/jwt'
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler'
+import { SentryModule } from '@sentry/nestjs/setup'
 
 import { PrismaModule } from '@futsmandu/database'
 import { RedisModule } from '@futsmandu/redis'
@@ -33,6 +34,8 @@ import { ENV } from '@futsmandu/utils'
       envFilePath: ['.env.owner', '../../.env', '.env'],
       cache: true,
     }),
+
+    SentryModule.forRoot(),
 
     PrismaModule,
     RedisModule,
@@ -63,6 +66,11 @@ import { ENV } from '@futsmandu/utils'
     HealthModule,
   ],
   providers: [
+    {
+      provide: 'SENTRY_DSN',
+      useFactory: (config: ConfigService) => config.get<string>('SENTRY_DSN'),
+      inject: [ConfigService],
+    },
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

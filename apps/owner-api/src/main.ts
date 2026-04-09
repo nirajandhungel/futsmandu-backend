@@ -1,3 +1,6 @@
+// IMPORTANT: Sentry instrumentation must be imported before any other module
+import './instrument.js'
+
 // apps/owner-api/src/main.ts
 // Owner API — NestJS 10 + FastifyAdapter.
 // Port 3002 — dedicated server for venue owners via Flutter mobile app.
@@ -150,12 +153,30 @@ async function bootstrap(): Promise<void> {
   logger.log(`   Environment: ${ENV['NODE_ENV']}`)
   logger.log(`   DB pool size: ${ENV['DB_POOL_SIZE'] ?? 5}`)
 
+  // Log S3/MinIO connection status
+  const s3Endpoint = ENV['S3_ENDPOINT']
+  const s3Bucket = ENV['S3_BUCKET']
+  if (s3Endpoint && s3Bucket) {
+    const isMinIO = s3Endpoint.includes('localhost') || s3Endpoint.includes('127.0.0.1')
+    logger.log(`🪣 ${isMinIO ? 'MinIO' : 'S3'} connected: ${s3Endpoint} → ${s3Bucket}`)
+  } else {
+    logger.warn(`🪣 S3/MinIO not configured — media uploads disabled`)
+  }
+
+  // Log Sentry status
+  if (ENV['SENTRY_DSN']) {
+    logger.log(`🐛 Sentry enabled: ${ENV['SENTRY_ENVIRONMENT']} (${ENV['SENTRY_RELEASE']})`)
+  } else {
+    logger.warn(`🐛 Sentry disabled — no DSN configured`)
+  }
+
   const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT']
   for (const signal of signals) {
     process.on(signal, async () => {
-      logger.log(`${signal} received — shutting down owner-api`)
+      logger.log(`${signal} received — shutting down owner-api gracefully`)
       markRedisShuttingDown()
       await app.close()
+      logger.log(`✅ Owner API shutdown complete`)
       process.exit(0)
     })
   }
