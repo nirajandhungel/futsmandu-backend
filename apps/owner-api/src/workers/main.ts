@@ -1,3 +1,6 @@
+// IMPORTANT: Sentry instrumentation must be imported before any other module
+import '../instrument.js'
+
 // apps/owner-api/src/workers/main.ts
 // Owner worker process entry — separate from API HTTP server.
 // Processes: notifications, emails, sms, image-processing queues.
@@ -29,12 +32,30 @@ async function bootstrap() {
   const logger = new Logger('OwnerWorker')
   logger.log('🔧 Owner worker started — processing: notifications, owner-emails, sms, image-processing')
 
+  // Log S3/MinIO connection status
+  const s3Endpoint = ENV['S3_ENDPOINT']
+  const s3Bucket = ENV['S3_BUCKET']
+  if (s3Endpoint && s3Bucket) {
+    const isMinIO = s3Endpoint.includes('localhost') || s3Endpoint.includes('127.0.0.1')
+    logger.log(`🪣 ${isMinIO ? 'MinIO' : 'S3'} connected: ${s3Endpoint} → ${s3Bucket}`)
+  } else {
+    logger.warn(`🪣 S3/MinIO not configured — image processing disabled`)
+  }
+
+  // Log Sentry status
+  if (ENV['SENTRY_DSN']) {
+    logger.log(`🐛 Sentry enabled: ${ENV['SENTRY_ENVIRONMENT']} (${ENV['SENTRY_RELEASE']})`)
+  } else {
+    logger.warn(`🐛 Sentry disabled — worker errors not monitored`)
+  }
+
   const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT']
   for (const signal of signals) {
     process.on(signal, async () => {
-      logger.log(`${signal} received — draining owner worker queues`)
+      logger.log(`${signal} received — draining owner worker queues gracefully`)
       markRedisShuttingDown()
       await app.close()
+      logger.log(`✅ Owner worker shutdown complete`)
       process.exit(0)
     })
   }

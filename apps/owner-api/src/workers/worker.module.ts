@@ -10,6 +10,7 @@ import { BullModule } from '@nestjs/bullmq'
 import { MediaModule } from '@futsmandu/media'
 import { QueuesModule } from '@futsmandu/queues'
 import { DatabaseModule } from '@futsmandu/database'
+import { SentryModule } from '@sentry/nestjs/setup'
 import { OwnerEmailProcessor }        from './processors/email.processor.js'
 import { OwnerNotificationProcessor } from './processors/notification.processor.js'
 import { OwnerSmsProcessor }          from './processors/sms.processor.js'
@@ -19,6 +20,7 @@ import { OwnerSmsProcessor }          from './processors/sms.processor.js'
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: ['../../.env', '.env'], cache: true }),
+    SentryModule.forRoot(),
     DatabaseModule,
     QueuesModule,
     MediaModule.forWorker(),   // ← registers shared ImageProcessingProcessor
