@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common'
 import type { FastifyReply } from 'fastify'
 import { ENV } from '@futsmandu/utils'
+import { SentryExceptionCaptured } from '@sentry/nestjs'
 
 interface PrismaError extends Error {
   code?: string
@@ -18,6 +19,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name)
   private readonly isProd = ENV['NODE_ENV'] === 'production'
 
+  @SentryExceptionCaptured()
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx   = host.switchToHttp()
     const reply = ctx.getResponse<FastifyReply>()

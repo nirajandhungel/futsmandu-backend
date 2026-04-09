@@ -44,4 +44,10 @@ export class HealthController {
 
     return { status: 'healthy', service: 'owner-api', db: 'up', redis: 'connected', uptime }
   }
+
+  @Public()
+  @Get('debug-sentry')
+  getError() {
+    throw new Error('My first Sentry error!')
+  }
 }
