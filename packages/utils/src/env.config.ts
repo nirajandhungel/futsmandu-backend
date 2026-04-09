@@ -63,7 +63,10 @@ export const ENV = {
   // ── App ───────────────────────────────────────────────────────────────────
   APP_URL:           process.env['APP_URL']           as string,
   ADMIN_ALLOWED_IPS: process.env['ADMIN_ALLOWED_IPS'] as string,
-  SENTRY_DSN:        process.env['SENTRY_DSN']        as string,
+  SENTRY_DSN:                process.env['SENTRY_DSN']                as string,
+  SENTRY_ENVIRONMENT:        process.env['SENTRY_ENVIRONMENT']        ?? (process.env['NODE_ENV'] ?? 'development'),
+  SENTRY_RELEASE:            process.env['SENTRY_RELEASE']            ?? process.env['npm_package_version'],
+  SENTRY_TRACES_SAMPLE_RATE: process.env['SENTRY_TRACES_SAMPLE_RATE'] ?? '0.1',
 
   // ── Ports ─────────────────────────────────────────────────────────────────
   PLAYER_API_PORT: process.env['PLAYER_API_PORT'] ?? '3001',
