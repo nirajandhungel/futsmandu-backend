@@ -7,6 +7,7 @@
 import { Module } from '@nestjs/common'
 import { ConfigModule } from '@nestjs/config'
 import { PrismaModule } from '@futsmandu/database'
+import { SentryModule } from '@sentry/nestjs/setup'
 import { NotificationProcessor } from './processors/notification.processor.js'
 import { SlotExpiryProcessor } from './processors/slot-expiry.processor.js'
 import { PaymentReconProcessor } from './processors/payment-recon.processor.js'
@@ -22,6 +23,7 @@ import { QueuesModule } from '@futsmandu/queues'
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: ['../../.env', '.env'], cache: true }),
+    SentryModule.forRoot(),
     PrismaModule,
     QueuesModule,
     BookingModule,

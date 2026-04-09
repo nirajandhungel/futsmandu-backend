@@ -1,3 +1,6 @@
+// IMPORTANT: Sentry instrumentation must be imported before any other module
+import '../instrument.js'
+
 // apps/player-api/src/workers/main.ts
 // BullMQ worker process — runs SEPARATELY from the NestJS API server.
 // Uses NestJS application context for DI (PrismaService, RedisService, etc.)
@@ -30,10 +33,28 @@ async function bootstrap() {
   await app.init()
   logger.log('🔧 All BullMQ workers started')
 
+  // Log S3/MinIO connection status
+  const s3Endpoint = process.env['S3_ENDPOINT']
+  const s3Bucket = process.env['S3_BUCKET']
+  if (s3Endpoint && s3Bucket) {
+    const isMinIO = s3Endpoint.includes('localhost') || s3Endpoint.includes('127.0.0.1')
+    logger.log(`🪣 ${isMinIO ? 'MinIO' : 'S3'} connected: ${s3Endpoint} → ${s3Bucket}`)
+  } else {
+    logger.warn(`🪣 S3/MinIO not configured — image processing disabled`)
+  }
+
+  // Log Sentry status
+  if (process.env['SENTRY_DSN']) {
+    logger.log(`🐛 Sentry enabled: ${process.env['SENTRY_ENVIRONMENT']} (${process.env['SENTRY_RELEASE']})`)
+  } else {
+    logger.warn(`🐛 Sentry disabled — worker errors not monitored`)
+  }
+
   const shutdown = async (sig: string) => {
-    new Logger('Workers').log(`${sig} — shutting down workers`)
+    new Logger('Workers').log(`${sig} — shutting down workers gracefully`)
     markRedisShuttingDown()
     await app.close()
+    new Logger('Workers').log(`✅ Player workers shutdown complete`)
     process.exit(0)
   }
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
