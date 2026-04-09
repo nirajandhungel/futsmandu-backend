@@ -1,0 +1,17 @@
+{
+  "name": "@futsmandu/sentry",
+  "version": "1.0.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@sentry/nestjs": "^10.47.0",
+    "@sentry/profiling-node": "^10.47.0"
+  },
+  "peerDependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0"
+  }
+}
