@@ -1,14 +1,14 @@
-// CHANGED: [C-2, M-7, SEC-3, PgBouncer-hints]
-// NEW ISSUES FOUND:
-//   - payments_booking @@ignore @@map("bookings") anti-pattern (M-7): removed, relation fixed directly
-//   - Missing refresh_token_version field on users (C-2)
-//   - Missing admin_audit_log model (SEC-3)
-//   - Missing relationMode = "prisma" and directUrl already present — added relationMode to avoid FK
-//     check queries through PgBouncer transaction-mode pooler
-
 // packages/database/prisma/schema.prisma
-// Single shared schema used by both player-api and owner-admin-api.
-// PgBouncer pooled URL for app queries; direct URL for migrations only.
+// FULL UPDATED SCHEMA — all payment split additions merged in.
+//
+// CHANGES vs previous version:
+//   [PAY-1] New enum: payout_status
+//   [PAY-2] New enum: payout_trigger
+//   [PAY-3] owners model: +esewa_id, +esewa_verified, +esewa_verified_at, +payouts relation
+//   [PAY-4] payments model: +payout relation
+//   [PAY-5] venues model: +payouts relation
+//   [PAY-6] New model: platform_config (admin fee %, etc.)
+//   [PAY-7] New model: owner_payouts (tracks every split payout, ACID-linked to payments)
 
 generator client {
   provider = "prisma-client-js"
@@ -17,12 +17,12 @@ generator client {
 
 datasource db {
   provider     = "postgresql"
-  url          = env("DATABASE_URL")       // PgBouncer port 6543 — all app queries
-  directUrl    = env("DIRECT_DATABASE_URL") // Direct port 5432 — migrations only
-  relationMode = "prisma"                   // Avoids FK check queries through PgBouncer
+  url          = env("DATABASE_URL")
+  directUrl    = env("DIRECT_DATABASE_URL")
+  relationMode = "prisma"
 }
 
-// ── Enums ────────────────────────────────────────────────────────────────────
+// ── Enums ─────────────────────────────────────────────────────────────────────
 
 enum booking_status {
   HELD
@@ -51,6 +51,21 @@ enum payment_status {
 enum payment_gateway {
   KHALTI
   ESEWA
+}
+
+// [PAY-1] Tracks the lifecycle of each owner payout attempt
+enum payout_status {
+  PENDING           // Job queued, not yet attempted
+  PROCESSING        // BullMQ worker picked it up
+  SUCCESS           // eSewa fund transfer confirmed
+  FAILED            // All retries exhausted — needs admin intervention
+  MANUALLY_RESOLVED // Admin marked resolved (e.g., bank transfer)
+}
+
+// [PAY-2] How the payout was triggered
+enum payout_trigger {
+  AUTO_SPLIT    // Automatic after player payment confirmed
+  MANUAL_RETRY  // Admin triggered from dashboard
 }
 
 enum friendship_status {
@@ -132,7 +147,7 @@ enum match_join_request_status {
   WITHDRAWN
 }
 
-// ── Users ────────────────────────────────────────────────────────────────────
+// ── Users ─────────────────────────────────────────────────────────────────────
 
 model users {
   id                    String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -156,8 +171,6 @@ model users {
   matches_lost          Int         @default(0)
   matches_draw          Int         @default(0)
   show_match_history    Boolean     @default(true)
-  // C-2: Monotonic version counter — incremented on every refresh token rotation.
-  // Stale refresh tokens (embedding older version) are rejected immediately.
   refresh_token_version Int         @default(0)
   created_at            DateTime    @default(now()) @db.Timestamptz
   updated_at            DateTime    @updatedAt @db.Timestamptz
@@ -178,7 +191,7 @@ model users {
   sent_join_requests   match_join_requests[]   @relation("JoinRequester")
   responded_requests   match_join_requests[]   @relation("JoinResponder")
   invited_match_members match_group_members[]  @relation("InvitedBy")
-  email_otps          email_verification_otps[] @relation("PlayerOtps")
+  email_otps           email_verification_otps[] @relation("PlayerOtps")
 
   @@index([email])
   @@index([phone])
@@ -195,7 +208,7 @@ model user_preferred_roles {
   @@index([user_id])
 }
 
-// ── Admins (platform RBAC) ───────────────────────────────────────────────────
+// ── Admins ────────────────────────────────────────────────────────────────────
 
 model admins {
   id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -205,44 +218,52 @@ model admins {
   role          admin_role @default(ADMIN)
   is_active     Boolean    @default(true)
   is_verified   Boolean    @default(false)
+  createdAt     DateTime   @default(now()) @db.Timestamptz
+  updatedAt     DateTime   @updatedAt @db.Timestamptz
 
-  createdAt DateTime @default(now()) @db.Timestamptz
-  updatedAt DateTime @updatedAt @db.Timestamptz
-
-  kycApprovals    owners[] @relation("AdminKycApprovals")
-  venueApprovals  venues[] @relation("AdminVenueApprovals")
-  email_otps      email_verification_otps[] @relation("AdminOtps")
+  kycApprovals   owners[]  @relation("AdminKycApprovals")
+  venueApprovals venues[]  @relation("AdminVenueApprovals")
+  email_otps     email_verification_otps[] @relation("AdminOtps")
 }
 
-// ── Owners ───────────────────────────────────────────────────────────────────
+// ── Owners ────────────────────────────────────────────────────────────────────
 
 model owners {
-  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name              String
-  email             String   @unique
-  phone             String   @unique
+  email             String    @unique
+  phone             String    @unique
   password_hash     String
   business_name     String?
-  is_verified       Boolean  @default(false)
-  is_active         Boolean  @default(true)
+  is_verified       Boolean   @default(false)
+  is_active         Boolean   @default(true)
   verification_docs Json?
 
-  // Admin-driven KYC approvals (kept in sync with legacy is_verified during migration/refactor)
   isKycApproved    Boolean   @default(false)
   kycApprovedAt    DateTime?
   kycApprovedById  String?   @db.Uuid
   kycApprovedBy    admins?   @relation("AdminKycApprovals", fields: [kycApprovedById], references: [id])
 
+  // [PAY-3] Owner's personal eSewa account for receiving payouts
+  // Admin must verify this is valid before payouts go through.
+  // Stored as the eSewa-registered phone number or email.
+  esewa_id          String?
+  esewa_verified    Boolean   @default(false)
+  esewa_verified_at DateTime? @db.Timestamptz
+
   fcm_token             String?
-  refresh_token_version Int      @default(0)
-  created_at        DateTime @default(now()) @db.Timestamptz
-  updated_at        DateTime @updatedAt @db.Timestamptz
+  refresh_token_version Int     @default(0)
+  created_at            DateTime @default(now()) @db.Timestamptz
+  updated_at            DateTime @updatedAt @db.Timestamptz
 
   venues     venues[]
   email_otps email_verification_otps[] @relation("OwnerOtps")
+  payouts    owner_payouts[] // [PAY-3]
+
+  @@index([esewa_verified]) // [PAY-3] Admin dashboard filter: unverified eSewa owners
 }
 
-// ── Venues & Courts ──────────────────────────────────────────────────────────
+// ── Venues & Courts ───────────────────────────────────────────────────────────
 
 model venues {
   id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -257,13 +278,10 @@ model venues {
   cover_image_url      String?
   is_active            Boolean  @default(true)
   is_verified          Boolean  @default(false)
-
-  // Admin-driven venue approvals (kept in sync with legacy is_verified during migration/refactor)
-  isApproved        Boolean   @default(false)
-  approvedAt         DateTime?
-  approvedById       String?   @db.Uuid
-  approvedBy         admins?   @relation("AdminVenueApprovals", fields: [approvedById], references: [id])
-
+  isApproved           Boolean  @default(false)
+  approvedAt           DateTime?
+  approvedById         String?  @db.Uuid
+  approvedBy           admins?  @relation("AdminVenueApprovals", fields: [approvedById], references: [id])
   avg_rating           Decimal  @default(0) @db.Decimal(3, 2)
   total_reviews        Int      @default(0)
   full_refund_hours    Int      @default(24) @db.SmallInt
@@ -277,6 +295,7 @@ model venues {
   bookings     bookings[]
   match_groups match_groups[]
   reviews      reviews[]
+  payouts      owner_payouts[] // [PAY-5]
 
   @@index([is_active, is_verified])
   @@index([owner_id])
@@ -327,7 +346,7 @@ model pricing_rules {
   @@index([court_id, is_active])
 }
 
-// ── Bookings — Critical Table ─────────────────────────────────────────────────
+// ── Bookings ──────────────────────────────────────────────────────────────────
 
 model bookings {
   id                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -357,7 +376,6 @@ model bookings {
   updated_at             DateTime       @updatedAt @db.Timestamptz
   booking_meta           Json?
 
-  // M-7: Direct relation — no payments_booking ghost model
   player       users?         @relation("PlayerBookings", fields: [player_id], references: [id], onDelete: SetNull)
   canceller    users?         @relation("CancelledBy", fields: [cancelled_by], references: [id])
   court        courts         @relation(fields: [court_id], references: [id], onDelete: Restrict)
@@ -367,18 +385,14 @@ model bookings {
   match_group  match_groups?
   review       reviews?
 
-  // ANTI-DOUBLE-BOOKING partial unique index applied via raw SQL migration:
-  // CREATE UNIQUE INDEX idx_bookings_slot_lock ON bookings(court_id, booking_date, start_time)
-  //   WHERE status IN ('HELD','PENDING_PAYMENT','CONFIRMED');
   @@index([player_id, created_at(sort: Desc)])
   @@index([court_id, booking_date, status])
   @@index([venue_id, booking_date, status])
   @@index([hold_expires_at, status])
 }
 
-// ── Payments ─────────────────────────────────────────────────────────────────
+// ── Payments ──────────────────────────────────────────────────────────────────
 
-// M-7: payments now relates directly to bookings — no ghost model
 model payments {
   id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   booking_id          String          @unique @db.Uuid
@@ -393,40 +407,118 @@ model payments {
   refund_initiated_at DateTime?       @db.Timestamptz
   refund_completed_at DateTime?       @db.Timestamptz
 
-  booking bookings @relation(fields: [booking_id], references: [id])
-  player  users    @relation(fields: [player_id], references: [id])
+  booking         bookings              @relation(fields: [booking_id], references: [id])
+  player          users                 @relation(fields: [player_id], references: [id])
   member_payments match_group_members[]
+  payout          owner_payouts?        // [PAY-4] one payment → one payout
 
   @@index([gateway_tx_id])
   @@index([status])
   @@index([player_id])
 }
 
-// ── Match Groups ─────────────────────────────────────────────────────────────
+// ── [PAY-6] Platform Config ───────────────────────────────────────────────────
+// Admin-configurable key-value store. Never hardcode business logic.
+// Seed with:
+//   INSERT INTO platform_config (key, value, description)
+//   VALUES ('admin_fee_percent', '5', 'Platform fee % taken from each booking payment');
+
+model platform_config {
+  key         String   @id
+  value       String
+  description String?
+  updated_by  String?  @db.Uuid
+  updated_at  DateTime @updatedAt @db.Timestamptz
+
+  @@map("platform_config")
+}
+
+// ── [PAY-7] Owner Payouts ─────────────────────────────────────────────────────
+// One record per booking payment. Created atomically with payment SUCCESS.
+// BullMQ processes the actual eSewa fund transfer asynchronously.
+//
+// Money audit trail:
+//   total_collected = admin_fee + owner_amount  (always true, enforced in service)
+//   admin_fee_pct   = snapshot of admin fee % at time of this payment
+//                     (so changing fee later doesn't retroactively affect records)
+
+model owner_payouts {
+  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  payment_id       String         @unique @db.Uuid
+  booking_id       String         @db.Uuid
+  owner_id         String         @db.Uuid
+  venue_id         String         @db.Uuid
+
+  // Money — all paisa (integer, never float)
+  total_collected  Int
+  admin_fee        Int
+  owner_amount     Int
+  admin_fee_pct    Int            @db.SmallInt
+
+  // Destination — snapshot at payout time
+  owner_esewa_id   String
+
+  // Status
+  status           payout_status  @default(PENDING)
+  trigger          payout_trigger @default(AUTO_SPLIT)
+
+  // eSewa transfer details
+  esewa_transfer_id  String?
+  esewa_response     Json?
+
+  // Retry tracking
+  attempt_count      Int      @default(0)
+  last_attempted_at  DateTime? @db.Timestamptz
+  last_failure_reason String?
+
+  // Manual resolution
+  resolved_by      String?   @db.Uuid
+  resolved_at      DateTime? @db.Timestamptz
+  resolution_note  String?
+
+  // Timestamps
+  created_at       DateTime  @default(now()) @db.Timestamptz
+  completed_at     DateTime? @db.Timestamptz
+
+  // Relations
+  payment  payments @relation(fields: [payment_id], references: [id])
+  owner    owners   @relation(fields: [owner_id], references: [id])
+  venue    venues   @relation(fields: [venue_id], references: [id])
+
+  @@index([status, created_at(sort: Desc)])  // Admin dashboard: pending/failed
+  @@index([owner_id, status])                // Owner payout history
+  @@index([booking_id])
+  @@index([venue_id, status])
+
+  @@map("owner_payouts")
+}
+
+// ── Match Groups ──────────────────────────────────────────────────────────────
 
 model match_groups {
-  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  booking_id        String       @unique @db.Uuid
-  venue_id          String       @db.Uuid
-  court_id          String       @db.Uuid
-  match_date        DateTime     @db.Date
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  booking_id        String          @unique @db.Uuid
+  venue_id          String          @db.Uuid
+  court_id          String          @db.Uuid
+  match_date        DateTime        @db.Date
   start_time        String
   end_time          String
-  admin_id          String       @db.Uuid
-  is_open           Boolean      @default(false)
-  join_mode         join_mode    @default(INVITE_ONLY)
+  admin_id          String          @db.Uuid
+  is_open           Boolean         @default(false)
+  join_mode         join_mode       @default(INVITE_ONLY)
   cost_split_mode   cost_split_mode @default(ADMIN_PAYS_ALL)
-  auto_accept       Boolean      @default(false)
-  max_players       Int          @db.SmallInt
-  min_players       Int          @db.SmallInt
-  slots_available   Int          @default(0)
+  auto_accept       Boolean         @default(false)
+  max_players       Int             @db.SmallInt
+  min_players       Int             @db.SmallInt
+  slots_available   Int             @default(0)
   description       String?
   skill_filter      skill_level?
-  invite_token      String?      @unique
-  token_expires_at  DateTime?    @db.Timestamptz
+  invite_token      String?         @unique
+  token_expires_at  DateTime?       @db.Timestamptz
   result_winner     String?
-  attendance_marked Boolean      @default(false)
-  created_at        DateTime     @default(now()) @db.Timestamptz
+  attendance_marked Boolean         @default(false)
+  created_at        DateTime        @default(now()) @db.Timestamptz
 
   booking bookings              @relation(fields: [booking_id], references: [id])
   venue   venues                @relation(fields: [venue_id], references: [id])
@@ -473,15 +565,15 @@ model match_join_requests {
   responded_by   String?                   @db.Uuid
 
   match_group match_groups @relation(fields: [match_group_id], references: [id], onDelete: Cascade)
-  user       users         @relation("JoinRequester", fields: [user_id], references: [id])
-  responder  users?        @relation("JoinResponder", fields: [responded_by], references: [id])
+  user        users        @relation("JoinRequester", fields: [user_id], references: [id])
+  responder   users?       @relation("JoinResponder", fields: [responded_by], references: [id])
 
   @@unique([match_group_id, user_id])
   @@index([match_group_id, status])
   @@index([user_id, status])
 }
 
-// ── Social ───────────────────────────────────────────────────────────────────
+// ── Social ────────────────────────────────────────────────────────────────────
 
 model friendships {
   id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -498,7 +590,7 @@ model friendships {
   @@index([recipient_id, status])
 }
 
-// ── Reliability ──────────────────────────────────────────────────────────────
+// ── Reliability ───────────────────────────────────────────────────────────────
 
 model no_show_logs {
   id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -570,16 +662,16 @@ model notifications {
 }
 
 model media_assets {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  key         String   @unique
-  assetType   String   @map("asset_type")
-  status      String   @default("pending")
-  uploaderId  String   @map("uploader_id") @db.Uuid
-  entityId    String   @map("entity_id")
-  webpKey     String?  @map("webp_key")
-  metadata    Json?
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key        String   @unique
+  assetType  String   @map("asset_type")
+  status     String   @default("pending")
+  uploaderId String   @map("uploader_id") @db.Uuid
+  entityId   String   @map("entity_id")
+  webpKey    String?  @map("webp_key")
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
 
   @@index([entityId, assetType])
   @@index([status])
@@ -599,8 +691,6 @@ model invite_tokens {
   @@index([token])
 }
 
-// ── Admin Audit Log (SEC-3) ──────────────────────────────────────────────────
-
 model admin_audit_log {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   admin_id    String   @db.Uuid
@@ -614,37 +704,25 @@ model admin_audit_log {
   @@index([target_id, target_type])
 }
 
-// ── Email Verification OTPs ──────────────────────────────────────────────────
-// OTP-based email verification for users, owners, and admins.
-// One-time use, self-destructing after verification or expiry.
-// Rate limiting: max 5 verification attempts per OTP, max 3 resend per 5 minutes.
-
 model email_verification_otps {
-  id              String   @id @default(cuid())
-  
-  // User type: 'player', 'owner', or 'admin'
-  user_type       String   @db.VarChar(20)
-  
-  // Foreign keys (one will be set based on user_type)
-  player_id       String?  @db.Uuid
-  owner_id        String?  @db.Uuid
-  admin_id        String?  @db.Uuid
-  
-  email           String   // Store email for convenience and rate limiting
-  otp             String   @db.VarChar(10) // 6-10 digit OTP
-  ip_address      String? // For rate limiting and security audit
-  user_agent      String? // For fraud detection
-  
-  attempts        Int      @default(0)
-  max_attempts    Int      @default(5)
-  
-  created_at      DateTime @default(now()) @db.Timestamptz
-  expires_at      DateTime @db.Timestamptz
-  verified_at     DateTime? @db.Timestamptz
+  id           String    @id @default(cuid())
+  user_type    String    @db.VarChar(20)
+  player_id    String?   @db.Uuid
+  owner_id     String?   @db.Uuid
+  admin_id     String?   @db.Uuid
+  email        String
+  otp          String    @db.VarChar(10)
+  ip_address   String?
+  user_agent   String?
+  attempts     Int       @default(0)
+  max_attempts Int       @default(5)
+  created_at   DateTime  @default(now()) @db.Timestamptz
+  expires_at   DateTime  @db.Timestamptz
+  verified_at  DateTime? @db.Timestamptz
 
-  player          users?   @relation("PlayerOtps", fields: [player_id], references: [id], onDelete: Cascade)
-  owner           owners?  @relation("OwnerOtps", fields: [owner_id], references: [id], onDelete: Cascade)
-  admin           admins?  @relation("AdminOtps", fields: [admin_id], references: [id], onDelete: Cascade)
+  player users?  @relation("PlayerOtps",  fields: [player_id], references: [id], onDelete: Cascade)
+  owner  owners? @relation("OwnerOtps",   fields: [owner_id],  references: [id], onDelete: Cascade)
+  admin  admins? @relation("AdminOtps",   fields: [admin_id],  references: [id], onDelete: Cascade)
 
   @@index([email])
   @@index([player_id])
