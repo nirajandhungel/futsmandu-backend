@@ -23,6 +23,7 @@ import { AdminPenaltiesModule }    from './modules/admin-penalties/admin-penalti
 import { AdminModerationModule }   from './modules/admin-moderation/admin-moderation.module.js'
 import { AdminAnalyticsModule }    from './modules/analytics/analytics.module.js'
 import { AdminHealthModule }       from './modules/health/health.module.js'
+import { AdminPaymentModule } from './modules/admin-payment/admin-payment.module.js'
 import { ENV } from '@futsmandu/utils'
 
 
@@ -58,6 +59,7 @@ import { ENV } from '@futsmandu/utils'
     AdminPenaltiesModule,
     AdminModerationModule,
     AdminAnalyticsModule,
+    AdminPaymentModule,
     AdminHealthModule,
   ],
   providers: [
