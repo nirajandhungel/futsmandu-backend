@@ -10,6 +10,7 @@ import { OwnerJwtGuard, Public } from '../../common/guards/owner-jwt.guard.js'
 import { CurrentOwner } from '../../common/decorators/current-owner.decorator.js'
 import type { AuthOwner } from '../../common/guards/owner-jwt.guard.js'
 import { ENV } from '@futsmandu/utils'
+import { MediaService } from '@futsmandu/media'
 
 const REFRESH_COOKIE = 'owner_refresh'
 const COOKIE_OPTS = {
@@ -23,7 +24,10 @@ const COOKIE_OPTS = {
 @ApiTags('Owner Auth')
 @Controller('auth')
 export class OwnerAuthController {
-  constructor(private readonly ownerAuth: OwnerAuthService) {}
+  constructor(
+    private readonly ownerAuth: OwnerAuthService,
+    private readonly media: MediaService,
+  ) {}
 
   @Public()
   @Post('register')
@@ -88,8 +92,17 @@ export class OwnerAuthController {
   @UseGuards(OwnerJwtGuard)
   @Post('upload-docs')
   @ApiBearerAuth('Owner-JWT')
-  @ApiOperation({ summary: 'Get presigned R2 PUT URL for verification documents' })
+  @ApiOperation({
+    summary: 'Get presigned R2 PUT URL for verification documents',
+    description: 'Step 1 of unified media flow. After uploading the file, call POST /media/confirm-upload.',
+  })
   uploadDocs(@CurrentOwner() owner: AuthOwner, @Body() dto: UploadDocDto) {
-    return this.ownerAuth.getPresignedDocUrl(owner.id, dto.docType)
+    return this.media.requestUploadUrl({
+      assetType: 'kyc_document',
+      ownerId: owner.id,
+      entityId: owner.id,
+      docType: dto.docType,
+      contentType: dto.contentType,
+    })
   }
 }

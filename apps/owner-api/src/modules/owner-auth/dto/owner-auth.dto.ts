@@ -7,10 +7,11 @@
 // apps/owner-admin-api/src/modules/owner-auth/dto/owner-auth.dto.ts
 import {
   IsEmail, IsString, IsNotEmpty, MinLength, MaxLength,
-  IsOptional, IsIn, Matches, IsUUID,
+  IsOptional, IsIn, Matches, IsUUID, IsEnum,
 } from 'class-validator'
 import { Transform } from 'class-transformer'
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
+import type { KycDocType } from '@futsmandu/media-core'
 
 export class RegisterOwnerDto {
   @ApiProperty()
@@ -58,9 +59,14 @@ export class RefreshTokenDto {
 }
 
 export class UploadDocDto {
-  @ApiProperty({ enum: ['citizenship', 'pan', 'business_reg', 'other'] })
-  @IsIn(['citizenship', 'pan', 'business_reg', 'other'])
-  docType!: string
+  @ApiProperty({ enum: ['citizenship', 'business_registration', 'business_pan'] })
+  @IsEnum(['citizenship', 'business_registration', 'business_pan'])
+  docType!: KycDocType
+
+  @ApiPropertyOptional({ enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] })
+  @IsEnum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf'])
+  @IsOptional()
+  contentType?: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'
 }
 
 // ── OTP Verification DTOs ────────────────────────────────────────────────────

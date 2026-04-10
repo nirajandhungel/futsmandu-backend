@@ -6,6 +6,7 @@ import { OwnerJwtGuard } from '../../common/guards/owner-jwt.guard.js'
 import { OtpService } from '@futsmandu/auth'
 import { ENV } from '@futsmandu/utils'
 import { QueuesModule } from '@futsmandu/queues'
+import { MediaModule as SharedMediaModule } from '@futsmandu/media'
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { QueuesModule } from '@futsmandu/queues'
       signOptions: { expiresIn: '15m' },
     }),
     QueuesModule,
+    SharedMediaModule,
   ],
   controllers: [OwnerAuthController],
   providers: [OwnerAuthService, OtpService, OwnerJwtGuard],
