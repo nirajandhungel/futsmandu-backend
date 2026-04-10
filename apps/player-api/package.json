@@ -18,6 +18,7 @@
     "@fastify/static": "^9.0.0",
     "@futsmandu/auth": "workspace:*",
     "@futsmandu/database": "workspace:*",
+    "@futsmandu/esewa-payout": "workspace:*",
     "@futsmandu/logger": "workspace:*",
     "@futsmandu/media": "workspace:*",
     "@futsmandu/media-core": "workspace:*",
