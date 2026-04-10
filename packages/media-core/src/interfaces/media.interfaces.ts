@@ -38,6 +38,7 @@ export interface RequestUploadUrlOptions {
 }
 
 export interface UploadUrlResult {
+  assetId: string
   uploadUrl: string
   key: string
   cdnUrl?: string        // Only for public assets
@@ -46,9 +47,9 @@ export interface UploadUrlResult {
 
 export interface ConfirmUploadOptions {
   ownerId: string
+  assetId: string
   key: string
   assetType: AssetType
-  assetId?: string
 }
 
 export interface SignedDownloadUrlOptions {
