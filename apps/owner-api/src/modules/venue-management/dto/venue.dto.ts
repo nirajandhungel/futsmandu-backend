@@ -203,3 +203,10 @@ export class UpdateCourtDto {
   @IsString()
   close_time?: string
 }
+
+export class ConfirmVenueImageUploadDto {
+  @ApiProperty({ description: 'Uploaded S3 object key returned by upload-url endpoint' })
+  @IsString()
+  @IsNotEmpty()
+  key!: string
+}
