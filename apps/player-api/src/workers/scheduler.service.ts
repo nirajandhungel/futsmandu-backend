@@ -10,6 +10,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common'
 import { InjectQueue } from '@nestjs/bullmq'
 import { Queue } from 'bullmq'
+import { ENV } from '@futsmandu/utils'
 
 @Injectable()
 export class SchedulerService implements OnModuleInit {
@@ -18,6 +19,7 @@ export class SchedulerService implements OnModuleInit {
   constructor(
     @InjectQueue('slot-expiry')   private readonly slotExpiryQueue: Queue,
     @InjectQueue('payment-recon') private readonly paymentReconQueue: Queue,
+    @InjectQueue('media-orphan-cleanup') private readonly mediaOrphanCleanupQueue: Queue,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -61,6 +63,23 @@ export class SchedulerService implements OnModuleInit {
       this.logger.log('Scheduled payment-recon job (every 15 min)')
     } catch (err) {
       this.logger.error('Failed to schedule payment-recon job', String(err))
+    }
+
+    try {
+      const everyMinutes = Math.max(ENV['MEDIA_ORPHAN_SCAN_EVERY_MINUTES'], 5)
+      await this.mediaOrphanCleanupQueue.add(
+        'run',
+        {},
+        {
+          jobId: 'media-orphan-cleanup-recurring',
+          repeat: { every: everyMinutes * 60 * 1000 },
+          removeOnComplete: 5,
+          removeOnFail: 10,
+        },
+      )
+      this.logger.log(`Scheduled media-orphan-cleanup job (every ${everyMinutes} min)`)
+    } catch (err) {
+      this.logger.error('Failed to schedule media-orphan-cleanup job', String(err))
     }
   }
 }
