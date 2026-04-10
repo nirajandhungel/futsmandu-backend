@@ -1,5 +1,10 @@
-// Venue management service — CRUD for venues, courts, and image uploads.
-// Every query scoped to owner_id — never returns another owner's data.
+// owner-api/src/modules/venue-management/venue-management.service.ts
+// UPDATED: Removed getImageUploadUrl() and confirmImageUpload() — these were
+// duplicating @futsmandu/media logic with a rogue inline S3 client and no file validation.
+// All uploads now go through MediaService (media.controller.ts → packages/media).
+//
+// ADDED: listGalleryImages() — queries media_assets for ready venue_gallery images.
+
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, Logger,
 } from '@nestjs/common'
@@ -27,6 +32,12 @@ function slugify(name: string): string {
     '-' +
     Date.now().toString(36)
   )
+}
+
+function formatCdnUrl(base: string, key: string): string {
+  const cleanBase = base.replace(/\/+$/, '')
+  const cleanKey = key.replace(/^\/+/, '')
+  return cleanBase ? `${cleanBase}/${cleanKey}` : cleanKey
 }
 
 @Injectable()
@@ -112,13 +123,13 @@ export class VenueManagementService {
       data: {
         venue_id:           venueId,
         name:               dto.name,
-        court_type:         dto.court_type ?? '5v5',
-        surface:            dto.surface    ?? 'turf',
-        capacity:           dto.capacity   ?? 10,
-        min_players:        dto.min_players ?? 4,
+        court_type:         dto.court_type         ?? '5v5',
+        surface:            dto.surface            ?? 'turf',
+        capacity:           dto.capacity           ?? 10,
+        min_players:        dto.min_players        ?? 4,
         slot_duration_mins: dto.slot_duration_mins ?? 60,
-        open_time:          dto.open_time  ?? '06:00',
-        close_time:         dto.close_time ?? '22:00',
+        open_time:          dto.open_time          ?? '06:00',
+        close_time:         dto.close_time         ?? '22:00',
       },
       select: {
         id: true, name: true, court_type: true, slot_duration_mins: true, created_at: true,
@@ -138,7 +149,6 @@ export class VenueManagementService {
   async softDeleteCourt(ownerId: string, courtId: string) {
     await this.assertCourtOwnership(courtId, ownerId)
 
-    // Guard: refuse if there are active future bookings
     const activeBookings = await this.prisma.bookings.count({
       where: {
         court_id:     courtId,
@@ -157,46 +167,33 @@ export class VenueManagementService {
     return { message: 'Court deactivated successfully' }
   }
 
-  // ── Cover Image Upload ─────────────────────────────────────────────────────
-  async getImageUploadUrl(
-    ownerId: string,
-    venueId: string,
-  ): Promise<{ uploadUrl: string; cdnUrl: string }> {
+  // ── Gallery images (query only — uploads go through media.controller.ts) ─
+  async listGalleryImages(ownerId: string, venueId: string) {
     await this.assertVenueOwnership(venueId, ownerId)
 
-    const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3')
-    const { getSignedUrl }              = await import('@aws-sdk/s3-request-presigner')
-
-    const s3 = new S3Client({
-      region:   ENV['S3_REGION'] || 'us-east-1',
-      endpoint: ENV['S3_ENDPOINT'],
-      forcePathStyle: ENV['S3_FORCE_PATH_STYLE'] === 'true',
-      credentials: {
-        accessKeyId:     ENV['S3_ACCESS_KEY'],
-        secretAccessKey: ENV['S3_SECRET_KEY'],
+    const assets = await this.prisma.media_assets.findMany({
+      where: {
+        entityId:  venueId,
+        assetType: 'venue_gallery',
+        status:    'ready',
       },
+      select: {
+        id:        true,
+        key:       true,
+        webpKey:   true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
     })
 
-    const key = `venues/${venueId}/cover.jpg`
-    const cmd = new PutObjectCommand({
-      Bucket:       ENV['S3_BUCKET'],
-      Key:          key,
-      ContentType:  'image/jpeg',
-      CacheControl: 'public, max-age=86400',
-    })
-
-    const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn: 600 })
     const cdnBase = ENV['S3_CDN_BASE_URL'] || ENV['S3_ENDPOINT'] || ''
-    const base = cdnBase.endsWith('/') ? cdnBase.slice(0, -1) : cdnBase
-    const cdnUrl    = `${base}/${key}`
 
-    // Pre-store CDN URL — client uploads and it becomes live
-    await this.prisma.venues.update({
-      where: { id: venueId },
-      data:  { cover_image_url: cdnUrl, updated_at: new Date() },
-    })
-
-    return { uploadUrl, cdnUrl }
+    return assets.map((a: { id: string; key: string; webpKey: string | null; createdAt: Date }) => ({
+      assetId:  a.id,
+      cdnUrl:   formatCdnUrl(cdnBase, a.key),
+      webpUrl:  a.webpKey ? formatCdnUrl(cdnBase, a.webpKey) : undefined,
+      uploadedAt: a.createdAt,
+    }))
   }
 
   // ── Ownership guards ───────────────────────────────────────────────────────
