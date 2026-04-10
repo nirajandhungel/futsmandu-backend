@@ -1,3 +1,8 @@
+// owner-api/src/modules/venue-management/venue-management.controller.ts
+// UPDATED: Removed POST /:id/images/upload-url and POST /:id/images/confirm.
+// All media uploads go through /media/* (media.controller.ts).
+// Kept GET /venues/:id/gallery for querying ready gallery images.
+
 import {
   Controller, Get, Post, Put, Delete, Body, Param, UseGuards,
 } from '@nestjs/common'
@@ -8,7 +13,7 @@ import {
 } from './dto/venue.dto.js'
 import { OwnerJwtGuard } from '../../common/guards/owner-jwt.guard.js'
 import { RolesGuard, Roles } from '../../common/guards/roles.guard.js'
-import { CurrentOwner, } from '../../common/decorators/current-owner.decorator.js'
+import { CurrentOwner } from '../../common/decorators/current-owner.decorator.js'
 import type { AuthOwner } from '../../common/guards/owner-jwt.guard.js'
 
 @ApiTags('Venue Management')
@@ -44,14 +49,24 @@ export class VenueManagementController {
 
   @Post(':id/courts')
   @ApiOperation({ summary: 'Create court' })
-  createCourt(@CurrentOwner() owner: AuthOwner, @Param('id') id: string, @Body() dto: CreateCourtDto) {
+  createCourt(
+    @CurrentOwner() owner: AuthOwner,
+    @Param('id') id: string,
+    @Body() dto: CreateCourtDto,
+  ) {
     return this.venues.createCourt(owner.id, id, dto)
   }
 
-  @Post(':id/images/upload-url')
-  @ApiOperation({ summary: 'Get presigned R2 PUT URL for cover image' })
-  imageUploadUrl(@CurrentOwner() owner: AuthOwner, @Param('id') id: string) {
-    return this.venues.getImageUploadUrl(owner.id, id)
+  // Gallery: query ready images (does NOT handle uploads — use POST /media/venues/:venueId/gallery/upload-url)
+  @Get(':id/gallery')
+  @ApiOperation({
+    summary: 'List ready gallery images for a venue',
+    description:
+      'Returns CDN URLs for all gallery images with status = ready. ' +
+      'To upload a new gallery image use POST /media/venues/:venueId/gallery/upload-url.',
+  })
+  listGallery(@CurrentOwner() owner: AuthOwner, @Param('id') id: string) {
+    return this.venues.listGalleryImages(owner.id, id)
   }
 }
 
