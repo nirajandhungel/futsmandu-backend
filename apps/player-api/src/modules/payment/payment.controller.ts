@@ -46,18 +46,6 @@ export class PaymentController {
     return this.paymentService.verifyEsewa(dto.data)
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Payment detail (no gateway_response — sensitive)' })
-  async getPayment(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthenticatedUser) {
-    const payment = await this.prisma.payments.findUnique({
-      where: { id },
-      select: { id: true, booking_id: true, player_id: true, amount: true, gateway: true, status: true, gateway_tx_id: true, initiated_at: true, completed_at: true, refund_initiated_at: true, refund_completed_at: true },
-    })
-    if (!payment) throw new NotFoundException('Payment not found')
-    if (payment.player_id !== user.id) throw new ForbiddenException('Access denied')
-    return { ...payment, displayAmount: formatPaisa(payment.amount) }
-  }
-
   @Get('history')
   async history(@CurrentUser() user: AuthenticatedUser) {
     const payments = await this.prisma.payments.findMany({
@@ -71,5 +59,17 @@ export class PaymentController {
       },
     })
     return payments.map((p: any) => ({ ...p, displayAmount: formatPaisa(p.amount) }))
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Payment detail (no gateway_response — sensitive)' })
+  async getPayment(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthenticatedUser) {
+    const payment = await this.prisma.payments.findUnique({
+      where: { id },
+      select: { id: true, booking_id: true, player_id: true, amount: true, gateway: true, status: true, gateway_tx_id: true, initiated_at: true, completed_at: true, refund_initiated_at: true, refund_completed_at: true },
+    })
+    if (!payment) throw new NotFoundException('Payment not found')
+    if (payment.player_id !== user.id) throw new ForbiddenException('Access denied')
+    return { ...payment, displayAmount: formatPaisa(payment.amount) }
   }
 }
