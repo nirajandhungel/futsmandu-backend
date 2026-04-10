@@ -79,6 +79,9 @@ importers:
       '@futsmandu/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@futsmandu/esewa-payout':
+        specifier: workspace:*
+        version: link:../../packages/esewa-payout
       '@futsmandu/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -215,6 +218,9 @@ importers:
       '@futsmandu/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@futsmandu/esewa-payout':
+        specifier: workspace:*
+        version: link:../../packages/esewa-payout
       '@futsmandu/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -224,6 +230,9 @@ importers:
       '@futsmandu/media-core':
         specifier: workspace:*
         version: link:../../packages/media-core
+      '@futsmandu/media-storage':
+        specifier: workspace:*
+        version: link:../../packages/media-storage
       '@futsmandu/queues':
         specifier: workspace:*
         version: link:../../packages/queues
@@ -357,6 +366,9 @@ importers:
       '@futsmandu/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@futsmandu/esewa-payout':
+        specifier: workspace:*
+        version: link:../../packages/esewa-payout
       '@futsmandu/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -536,6 +548,27 @@ importers:
       prisma:
         specifier: ^6.5.0
         version: 6.19.3(typescript@5.9.3)
+
+  packages/esewa-payout:
+    dependencies:
+      '@futsmandu/database':
+        specifier: workspace:*
+        version: link:../database
+      '@futsmandu/queues':
+        specifier: workspace:*
+        version: link:../queues
+      '@futsmandu/utils':
+        specifier: workspace:*
+        version: link:../utils
+      '@nestjs/bullmq':
+        specifier: ^11.0.2
+        version: 11.0.4(@nestjs/common@11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.18(@nestjs/common@11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(bullmq@5.73.0)
+      '@nestjs/common':
+        specifier: ^11.0.11
+        version: 11.1.18(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      bullmq:
+        specifier: ^5.34.8
+        version: 5.73.0
 
   packages/logger:
     dependencies:

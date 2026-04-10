@@ -54,3 +54,9 @@ node_modules/.cache/
 
 
 /.pnpm-store
+
+# dev files
+dev/
+
+# local seed config
+seed-config.local.json

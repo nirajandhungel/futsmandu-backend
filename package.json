@@ -20,6 +20,7 @@
     "ignoredBuiltDependencies": [
       "@nestjs/core",
       "@scarf/scarf",
+      "@sentry-internal/node-cpu-profiler",
       "msgpackr-extract"
     ],
     "onlyBuiltDependencies": [
@@ -65,7 +66,8 @@
     "docker:build": "docker compose --env-file .env -f infrastructure/docker-compose.yml build",
     "docker:up": "docker compose --env-file .env -f infrastructure/docker-compose.yml up -d",
     "docker:down": "docker compose --env-file .env -f infrastructure/docker-compose.yml down",
-    "seed:admin":"pnpm --filter @futsmandu/admin-api exec dotenv -e ../../.env -- tsx src/scripts/seed-admin.ts"
+    "seed:admin": "pnpm --filter @futsmandu/admin-api exec dotenv -e ../../.env -- tsx src/scripts/seed-admin.ts",
+    "seed:config": "pnpm --filter @futsmandu/admin-api exec dotenv -e ../../.env -- tsx src/scripts/seed-config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
