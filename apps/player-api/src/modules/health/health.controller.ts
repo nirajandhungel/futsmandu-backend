@@ -21,8 +21,10 @@ export class HealthController {
   async check(@Res({ passthrough: true }) reply: FastifyReply) {
     const uptime = Math.floor(process.uptime())
 
-    const redisOk = this.redis.isConnected()
-    const dbOk = await this.prisma.isHealthy()
+    const [dbOk, redisOk] = await Promise.all([
+      this.prisma.isHealthy(),
+      this.redis.ping(),
+    ])
 
     if (!dbOk) {
       reply.status(503)
