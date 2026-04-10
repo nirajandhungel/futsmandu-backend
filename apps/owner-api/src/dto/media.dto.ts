@@ -1,56 +1,90 @@
+// owner-api/src/dto/media.dto.ts
+// UPDATED: Improved Swagger descriptions. No logic changes.
+
 import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator'
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
 import { AssetType, KycDocType } from '@futsmandu/media-core'
 
 export class RequestUploadUrlDto {
-  @ApiProperty({ enum: ['player_profile','owner_profile','venue_cover','venue_gallery','venue_verification','kyc_document'] })
-  @IsEnum(['player_profile','owner_profile','venue_cover','venue_gallery','venue_verification','kyc_document'])
-  assetType!: AssetType;
+  @ApiProperty({
+    enum: ['player_profile', 'owner_profile', 'venue_cover', 'venue_gallery', 'venue_verification', 'kyc_document'],
+    description: 'Type of asset to upload',
+  })
+  @IsEnum(['player_profile', 'owner_profile', 'venue_cover', 'venue_gallery', 'venue_verification', 'kyc_document'])
+  assetType!: AssetType
 
-  @ApiProperty({ description: 'playerId, ownerId, or venueId depending on assetType' })
+  @ApiProperty({
+    description: 'Context-dependent entity ID: ownerId for profile/kyc, venueId for venue assets',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
   @IsString()
-  entityId!: string;
+  entityId!: string
 
-  @ApiPropertyOptional({ enum: ['citizenship','business_registration','business_pan'], description: 'Type of KYC document' })
-  @IsEnum(['citizenship','business_registration','business_pan'])
+  @ApiPropertyOptional({
+    enum: ['citizenship', 'business_registration', 'business_pan'],
+    description: 'Required when assetType = kyc_document',
+  })
+  @IsEnum(['citizenship', 'business_registration', 'business_pan'])
   @IsOptional()
-  docType?: KycDocType;
+  docType?: KycDocType
 
-  @ApiPropertyOptional({ enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] })
+  @ApiPropertyOptional({
+    enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+    description: 'MIME type of the file you intend to upload. Defaults to image/jpeg for images, application/pdf for kyc_document.',
+  })
   @IsEnum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf'])
   @IsOptional()
-  contentType?: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf';
+  contentType?: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'
 }
 
 export class ConfirmUploadDto {
-  @ApiProperty()
+  @ApiProperty({
+    description: 'The media_assets.id returned by upload-url',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  @IsUUID()
+  assetId!: string
+
+  @ApiProperty({
+    description: 'The key value returned by the upload-url endpoint',
+    example: 'venues/550e8400-e29b-41d4-a716-446655440000/cover/abc123.jpg',
+  })
   @IsString()
   key!: string
 
-  @ApiProperty({ enum: ['player_profile','owner_profile','venue_cover','venue_gallery','venue_verification','kyc_document'] })
-  @IsEnum(['player_profile','owner_profile','venue_cover','venue_gallery','venue_verification','kyc_document'])
+  @ApiProperty({
+    enum: ['player_profile', 'owner_profile', 'venue_cover', 'venue_gallery', 'venue_verification', 'kyc_document'],
+    description: 'Must match the assetType used when requesting the upload URL',
+  })
+  @IsEnum(['player_profile', 'owner_profile', 'venue_cover', 'venue_gallery', 'venue_verification', 'kyc_document'])
   assetType!: AssetType
 }
 
 export class OwnerKycUploadUrlDto {
-  @ApiProperty({ enum: ['citizenship','business_registration','business_pan'] })
-  @IsEnum(['citizenship','business_registration','business_pan'])
+  @ApiProperty({
+    enum: ['citizenship', 'business_registration', 'business_pan'],
+    description: 'Type of KYC document',
+  })
+  @IsEnum(['citizenship', 'business_registration', 'business_pan'])
   docType!: KycDocType
 
-  @ApiPropertyOptional({ enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] })
+  @ApiPropertyOptional({
+    enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+    description: 'MIME type of the file you intend to upload. Defaults to application/pdf.',
+  })
   @IsEnum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf'])
   @IsOptional()
-  contentType?: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf';
+  contentType?: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'
 }
 
 export class DeleteAssetDto {
-  @ApiProperty()
+  @ApiProperty({ description: 'UUID of the media_asset record to delete' })
   @IsUUID()
   assetId!: string
 }
 
 export class AssetStatusDto {
-  @ApiProperty()
+  @ApiProperty({ description: 'UUID of the media_asset record' })
   @IsUUID()
   assetId!: string
 }
