@@ -25,6 +25,7 @@ import { StaffModule }           from './modules/staff/staff.module.js'
 import { MediaModule }           from './modules/media/media.module.js'
 import { NotificationsModule }   from './modules/notifications/notifications.module.js'
 import { HealthModule }          from './modules/health/health.module.js'
+import { OwnerPaymentModule } from './modules/owner-payment/owner-payment.module.js'
 import { ENV } from '@futsmandu/utils'
 
 @Module({
@@ -63,6 +64,7 @@ import { ENV } from '@futsmandu/utils'
     StaffModule,
     MediaModule,
     NotificationsModule,
+    OwnerPaymentModule,
     HealthModule,
   ],
   providers: [
