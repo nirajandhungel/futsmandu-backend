@@ -39,6 +39,9 @@ export const ENV = {
   KHALTI_SECRET_KEY:  process.env['KHALTI_SECRET_KEY']  as string,
   ESEWA_SECRET_KEY:   process.env['ESEWA_SECRET_KEY']   as string,
   ESEWA_PRODUCT_CODE: process.env['ESEWA_PRODUCT_CODE'] as string,
+  // Payout API keys fall back to existing eSewa config for compatibility.
+  ESEWA_MERCHANT_CODE: process.env['ESEWA_MERCHANT_CODE'] ?? process.env['ESEWA_PRODUCT_CODE'] ?? '',
+  ESEWA_MERCHANT_SECRET: process.env['ESEWA_MERCHANT_SECRET'] ?? process.env['ESEWA_SECRET_KEY'] ?? '',
 
   // ── Storage (Provider-agnostic) ───────────────────────────────────────────
   STORAGE_PROVIDER:    process.env['STORAGE_PROVIDER']    as string,
@@ -76,6 +79,8 @@ export const ENV = {
   // ── Runtime ───────────────────────────────────────────────────────────────
   npm_package_version: process.env['npm_package_version'] as string,
   HOSTNAME:            process.env['HOSTNAME']            as string,
+  MEDIA_ORPHAN_MAX_AGE_HOURS: parseInt(process.env['MEDIA_ORPHAN_MAX_AGE_HOURS'] ?? '24', 10),
+  MEDIA_ORPHAN_SCAN_EVERY_MINUTES: parseInt(process.env['MEDIA_ORPHAN_SCAN_EVERY_MINUTES'] ?? '30', 10),
 } as const
 
 // ── Boot-time validation ──────────────────────────────────────────────────────
