@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
 import { ProfileService, UpdateProfileDto } from './profile.service.js'
+import { ConfirmUploadDto } from '../../dto/media.dto.js'
 import { CurrentUser, Public } from '@futsmandu/auth'
 import type { AuthenticatedUser } from '@futsmandu/types'
 
@@ -46,8 +47,8 @@ export class ProfileController {
   @ApiOperation({ summary: 'Step 2 — Confirm avatar upload, triggers resize job' })
   avatarConfirm(
     @CurrentUser() u: AuthenticatedUser,
-    @Body('key') key: string,
+    @Body() dto: ConfirmUploadDto,
   ) {
-    return this.profileService.confirmAvatarUpload(u.id, key)
+    return this.profileService.confirmAvatarUpload(u.id, dto.assetId, dto.key)
   }
 }

@@ -97,7 +97,7 @@ export class ProfileService {
 
   // ── Profile image upload ─────────────────────────────────────────────────
   // Delegates entirely to shared MediaService — no S3 code here.
-  // Returns uploadUrl + key. Client PUTs to uploadUrl, then calls confirm-upload.
+  // Returns assetId + uploadUrl + key. Client PUTs to uploadUrl, then confirms with assetId + key.
   async getAvatarUploadUrl(userId: string) {
     return this.media.requestUploadUrl({
       assetType: 'player_profile',
@@ -106,12 +106,13 @@ export class ProfileService {
     })
   }
 
-  async confirmAvatarUpload(userId: string, key: string) {
+  async confirmAvatarUpload(userId: string, assetId: string, key: string) {
     const result = await this.media.confirmUpload({
       ownerId: userId,
+      assetId,
       key,
       assetType: 'player_profile',
-    } as any)
+    })
 
     // After confirming, update the user's profile_image_url to the CDN URL.
     // We store the KEY, then derive the CDN URL dynamically.
