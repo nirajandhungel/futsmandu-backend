@@ -1,0 +1,14 @@
+{
+  "platformConfig": [
+    {
+      "key": "admin_fee_percent",
+      "value": "5",
+      "description": "Platform fee % taken from each booking"
+    },
+    {
+      "key": "payout_enabled",
+      "value": "true",
+      "description": "Global switch for auto payout jobs"
+    }
+  ]
+}
