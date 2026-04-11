@@ -5,12 +5,11 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
 import type { FastifyRequest, FastifyReply } from 'fastify'
 import { OwnerAuthService } from './owner-auth.service.js'
-import { RegisterOwnerDto, LoginOwnerDto, UploadDocDto, VerifyOtpDto, ResendOtpDto } from './dto/owner-auth.dto.js'
+import { RegisterOwnerDto, LoginOwnerDto, VerifyOtpDto, ResendOtpDto } from './dto/owner-auth.dto.js'
 import { OwnerJwtGuard, Public } from '../../common/guards/owner-jwt.guard.js'
 import { CurrentOwner } from '../../common/decorators/current-owner.decorator.js'
 import type { AuthOwner } from '../../common/guards/owner-jwt.guard.js'
 import { ENV } from '@futsmandu/utils'
-import { MediaService } from '@futsmandu/media'
 
 const REFRESH_COOKIE = 'owner_refresh'
 const COOKIE_OPTS = {
@@ -26,7 +25,6 @@ const COOKIE_OPTS = {
 export class OwnerAuthController {
   constructor(
     private readonly ownerAuth: OwnerAuthService,
-    private readonly media: MediaService,
   ) {}
 
   @Public()
@@ -87,22 +85,5 @@ export class OwnerAuthController {
   logout(@Res({ passthrough: true }) res: FastifyReply) {
     void res.clearCookie(REFRESH_COOKIE, { path: COOKIE_OPTS.path })
     return { message: 'Logged out' }
-  }
-
-  @UseGuards(OwnerJwtGuard)
-  @Post('upload-docs')
-  @ApiBearerAuth('Owner-JWT')
-  @ApiOperation({
-    summary: 'Get presigned R2 PUT URL for verification documents',
-    description: 'Step 1 of unified media flow. After uploading the file, call POST /media/confirm-upload.',
-  })
-  uploadDocs(@CurrentOwner() owner: AuthOwner, @Body() dto: UploadDocDto) {
-    return this.media.requestUploadUrl({
-      assetType: 'kyc_document',
-      ownerId: owner.id,
-      entityId: owner.id,
-      docType: dto.docType,
-      contentType: dto.contentType,
-    })
   }
 }
