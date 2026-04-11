@@ -1,14 +1,13 @@
-// owner-api/src/modules/media/media.controller.ts
-// UPDATED: Consolidated ALL upload endpoints here.
-// The old venue-management upload routes (POST /venues/:id/images/upload-url
-// and POST /venues/:id/images/confirm) are REMOVED from venue-management.controller.ts.
-// Use these endpoints instead for ALL media uploads — KYC, profile, and venue images.
+// apps/owner-api/src/modules/media/media.controller.ts
+// ─── ADDITIVE UPDATE ──────────────────────────────────────────────────────────
+// EXISTING endpoints: all unchanged (upload-url, confirm-upload, kyc/*, profile/*,
+//   venues/*/cover, venues/*/gallery, venues/*/verification, download-url, status, delete).
 //
-// Upload flow (same for every asset type):
-//   1. POST /media/<specific-endpoint>/upload-url  → get presigned PUT URL + key
-//   2. Client PUTs file directly to the presigned URL (no server involved)
-//   3. POST /media/confirm-upload { key, assetType } → server validates + enqueues processing
-//   4. GET  /media/status/:assetId → poll until status === 'ready'
+// NEW endpoints added:
+//   GET  /media/_debug/presign-test          ← debug: verify signed URL generation
+//   GET  /media/venues/:venueId/gallery      ← gallery with signed URLs
+//   POST /media/kyc/view-url                 ← owner self-view KYC doc (signed)
+// ─────────────────────────────────────────────────────────────────────────────
 
 import {
   Controller, Post, Delete, Body, Query, UseGuards, Param, ParseUUIDPipe, Get,
@@ -21,6 +20,7 @@ import {
 } from '../../dto/media.dto.js'
 import { OwnerJwtGuard } from '../../common/guards/owner-jwt.guard.js'
 import { CurrentOwner } from '../../common/decorators/current-owner.decorator.js'
+import { ENV } from '@futsmandu/utils'
 
 @ApiTags('Media')
 @ApiBearerAuth('Owner-JWT')
@@ -29,20 +29,10 @@ import { CurrentOwner } from '../../common/decorators/current-owner.decorator.js
 export class MediaController {
   constructor(private readonly media: MediaService) {}
 
-  // ── Generic upload-url (advanced — use specific shortcuts below when possible) ──
+  // ── EXISTING: Generic upload-url ────────────────────────────────────────────
   @Post('upload-url')
   @Throttle({ default: { limit: 50, ttl: 60_000 } })
-  @ApiOperation({
-    summary: 'Request presigned R2 upload URL',
-    description: [
-      'Generic endpoint. Prefer the specific shortcuts:',
-      '  POST /media/kyc/upload-url',
-      '  POST /media/profile/avatar/upload-url',
-      '  POST /media/venues/:venueId/cover/upload-url',
-      '  POST /media/venues/:venueId/gallery/upload-url',
-      '  POST /media/venues/:venueId/verification/upload-url',
-    ].join('\n'),
-  })
+  @ApiOperation({ summary: 'Request presigned R2 upload URL' })
   requestUploadUrl(
     @CurrentOwner() owner: { id: string },
     @Body() dto: RequestUploadUrlDto,
@@ -56,16 +46,9 @@ export class MediaController {
     })
   }
 
-  // ── Confirm upload (same endpoint for ALL asset types) ─────────────────────
+  // ── EXISTING: Confirm upload ────────────────────────────────────────────────
   @Post('confirm-upload')
-  @ApiOperation({
-    summary: 'Step 3 — Confirm upload complete',
-    description:
-      'Call after successfully PUTting the file to the presigned URL. ' +
-      'Server validates the file, creates/updates the media_assets record, ' +
-      'and enqueues an image-processing job (skipped for kyc_document). ' +
-      'Returns assetId — use GET /media/status/:assetId to poll processing status.',
-  })
+  @ApiOperation({ summary: 'Step 3 — Confirm upload complete' })
   confirmUpload(
     @CurrentOwner() owner: { id: string },
     @Body() dto: ConfirmUploadDto,
@@ -78,15 +61,9 @@ export class MediaController {
     } as any)
   }
 
-  // ── KYC documents ─────────────────────────────────────────────────────────
+  // ── EXISTING: KYC upload-url ────────────────────────────────────────────────
   @Post('kyc/upload-url')
-  @ApiOperation({
-    summary: 'Step 1 — Get presigned URL for KYC document upload',
-    description:
-      'docType: citizenship | business_registration | business_pan. ' +
-      'Each docType is a deterministic key (overwriting previous upload). ' +
-      'Accepted: image/jpeg, image/png, image/webp, application/pdf (max 5 MB).',
-  })
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for KYC document upload' })
   requestKycUploadUrl(
     @CurrentOwner() owner: { id: string },
     @Body() dto: OwnerKycUploadUrlDto,
@@ -100,12 +77,24 @@ export class MediaController {
     })
   }
 
-  // ── Owner profile avatar ───────────────────────────────────────────────────
-  @Post('profile/avatar/upload-url')
+  // ── NEW: KYC self-view URL (owner sees their own KYC doc) ──────────────────
+  @Post('kyc/view-url')
   @ApiOperation({
-    summary: 'Step 1 — Get presigned URL for owner avatar upload',
-    description: 'Accepted: image/jpeg, image/png, image/webp (max 5 MB). Resized to 400×400 px.',
+    summary: 'Get a signed URL to view your uploaded KYC document',
+    description:
+      'Returns a time-limited signed GET URL for the specified KYC docType. ' +
+      'Works regardless of USE_SIGNED_IMAGE_URLS flag (KYC is always private).',
   })
+  getKycViewUrl(
+    @CurrentOwner() owner: { id: string },
+    @Body('docType') docType: string,
+  ) {
+    return this.media.getKycDocSignedUrl(owner.id, docType, 600)
+  }
+
+  // ── EXISTING: Owner profile avatar ─────────────────────────────────────────
+  @Post('profile/avatar/upload-url')
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for owner avatar upload' })
   requestOwnerAvatarUploadUrl(@CurrentOwner() owner: { id: string }) {
     return this.media.requestUploadUrl({
       assetType: 'owner_profile',
@@ -114,15 +103,10 @@ export class MediaController {
     })
   }
 
-  // ── Venue cover image ──────────────────────────────────────────────────────
+  // ── EXISTING: Venue cover upload ────────────────────────────────────────────
   @Post('venues/:venueId/cover/upload-url')
   @ApiParam({ name: 'venueId', description: 'UUID of the venue' })
-  @ApiOperation({
-    summary: 'Step 1 — Get presigned URL for venue cover image upload',
-    description:
-      'Accepted: image/jpeg, image/png, image/webp (max 5 MB). ' +
-      'Resized to 1280×720 px (16:9). Overwrites previous cover on confirm.',
-  })
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for venue cover image upload' })
   requestVenueCoverUploadUrl(
     @CurrentOwner() owner: { id: string },
     @Param('venueId', ParseUUIDPipe) venueId: string,
@@ -134,16 +118,10 @@ export class MediaController {
     })
   }
 
-  // ── Venue gallery images ───────────────────────────────────────────────────
+  // ── EXISTING: Venue gallery upload ─────────────────────────────────────────
   @Post('venues/:venueId/gallery/upload-url')
   @ApiParam({ name: 'venueId', description: 'UUID of the venue' })
-  @ApiOperation({
-    summary: 'Step 1 — Get presigned URL for a venue gallery image upload',
-    description:
-      'Each call generates a unique key (UUID). ' +
-      'Call once per image. Resized to 1024×768 px. ' +
-      'Query ready gallery images via GET /venues/:venueId/gallery.',
-  })
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for a venue gallery image upload' })
   requestVenueGalleryUploadUrl(
     @CurrentOwner() owner: { id: string },
     @Param('venueId', ParseUUIDPipe) venueId: string,
@@ -155,14 +133,10 @@ export class MediaController {
     })
   }
 
-  // ── Venue verification image ───────────────────────────────────────────────
+  // ── EXISTING: Venue verification upload ────────────────────────────────────
   @Post('venues/:venueId/verification/upload-url')
   @ApiParam({ name: 'venueId', description: 'UUID of the venue' })
-  @ApiOperation({
-    summary: 'Step 1 — Get presigned URL for venue verification document upload',
-    description:
-      'Private asset — not served via CDN. Use GET /media/download-url to get a signed download URL for admin review.',
-  })
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for venue verification document upload' })
   requestVenueVerificationUploadUrl(
     @CurrentOwner() owner: { id: string },
     @Param('venueId', ParseUUIDPipe) venueId: string,
@@ -174,24 +148,41 @@ export class MediaController {
     })
   }
 
-  // ── Signed download URL (private assets only) ─────────────────────────────
+  // ── EXISTING: Signed download URL ──────────────────────────────────────────
   @Post('download-url')
-  @ApiOperation({
-    summary: 'Get a signed download URL for a private asset (KYC / venue verification)',
-    description: 'Only works for private keys (owners/*/kyc/* or venues/*/verification/*). Expires in 600 s.',
-  })
-  getSignedDownloadUrl(
-    @Body('key') key: string,
-  ) {
+  @ApiOperation({ summary: 'Get a signed download URL for a private asset (KYC / venue verification)' })
+  getSignedDownloadUrl(@Body('key') key: string) {
     return this.media.getSignedDownloadUrl({ key })
   }
 
-  // ── Status poll ────────────────────────────────────────────────────────────
-  @Get('status/:assetId')
+  // ── NEW: Gallery listing with signed URLs ───────────────────────────────────
+  @Get('venues/:venueId/gallery')
+  @ApiParam({ name: 'venueId', description: 'UUID of the venue' })
   @ApiOperation({
-    summary: 'Poll upload/processing status',
-    description: 'Returns { status: "processing" | "ready" | "failed", webpKey? }. Poll until ready.',
+    summary: 'List venue gallery images with signed URLs',
+    description:
+      'Returns gallery images. When USE_SIGNED_IMAGE_URLS=true, each image ' +
+      'includes a signed_url field (valid 1 hour) alongside the legacy cdn_url.',
   })
+  async getVenueGallery(
+    @CurrentOwner() owner: { id: string },
+    @Param('venueId', ParseUUIDPipe) venueId: string,
+  ) {
+    const images = await this.media.getGallerySignedUrls(venueId)
+    // Return both fields for backward compat
+    return images.map(img => ({
+      asset_id:   img.assetId,
+      key:        img.key,
+      cdn_url:    img.cdnUrl,            // legacy — always present
+      signed_url: img.signedUrl ?? null, // new — present when flag=true
+      webp_url:   img.webpUrl ?? null,
+      uploaded_at: img.uploadedAt,
+    }))
+  }
+
+  // ── EXISTING: Status poll ───────────────────────────────────────────────────
+  @Get('status/:assetId')
+  @ApiOperation({ summary: 'Poll upload/processing status' })
   getUploadStatus(
     @CurrentOwner() owner: { id: string },
     @Param('assetId', ParseUUIDPipe) assetId: string,
@@ -199,7 +190,7 @@ export class MediaController {
     return this.media.getUploadStatus(assetId, owner.id)
   }
 
-  // ── Delete asset ───────────────────────────────────────────────────────────
+  // ── EXISTING: Delete asset ──────────────────────────────────────────────────
   @Delete('asset')
   @ApiOperation({ summary: 'Delete an R2 asset you own' })
   deleteAsset(
@@ -207,5 +198,47 @@ export class MediaController {
     @Query() dto: DeleteAssetDto,
   ) {
     return this.media.deleteAsset(dto.assetId, owner.id)
+  }
+
+  // ── NEW: Debug endpoint — verify signed URL generation (non-production safe) ─
+  @Get('_debug/presign-test')
+  @ApiOperation({
+    summary: '[DEBUG] Test presigned URL generation',
+    description:
+      'Returns a test signed URL, expiry, and config info. ' +
+      'Only active when NODE_ENV !== production. ' +
+      'Use to verify R2 credentials and signed URL flow before enabling USE_SIGNED_IMAGE_URLS.',
+  })
+  async debugPresignTest(@Query('key') key: string) {
+    if (ENV['NODE_ENV'] === 'production') {
+      return { error: 'Debug endpoint disabled in production' }
+    }
+
+    const testKey = key || 'venues/test-venue-id/cover/test.jpg'
+    const flagEnabled = ENV['USE_SIGNED_IMAGE_URLS'] === 'true'
+
+    try {
+      const signedUrl = await this.media.getSignedImageUrl(testKey, 300)
+      return {
+        ok:            true,
+        flag_enabled:  flagEnabled,
+        key_tested:    testKey,
+        signed_url:    signedUrl,
+        expires_in_s:  300,
+        expires_at:    new Date(Date.now() + 300_000).toISOString(),
+        bucket:        ENV['S3_BUCKET'] || '(not set)',
+        endpoint:      ENV['S3_ENDPOINT'] || '(not set)',
+        note:          flagEnabled
+          ? 'FLAG ON — signed URLs active in all responses'
+          : 'FLAG OFF — legacy CDN URLs used in responses (this URL is from test call)',
+      }
+    } catch (err: unknown) {
+      return {
+        ok:           false,
+        flag_enabled: flagEnabled,
+        key_tested:   testKey,
+        error:        err instanceof Error ? err.message : String(err),
+      }
+    }
   }
 }

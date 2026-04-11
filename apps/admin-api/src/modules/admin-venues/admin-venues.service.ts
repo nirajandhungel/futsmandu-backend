@@ -1,6 +1,11 @@
 // apps/admin-api/src/modules/admin-venues/admin-venues.service.ts
-// CHANGED: Removed inline S3Client instantiation in getOwnerDocUrl().
-// Now delegates to @futsmandu/media MediaService.getSignedDownloadUrl().
+// ─── ADDITIVE UPDATE ──────────────────────────────────────────────────────────
+// CHANGED: getOwnerDocUrl() now uses media.getKycDocSignedUrl() — handles any
+//          file extension (jpg/png/webp/pdf), not just .pdf.
+// CHANGED: getVenueVerificationUrl() now uses media.getVenueVerificationSignedUrl().
+// NEW:     listPendingVenues() includes cover_image_signed_url (additive).
+// ALL other methods untouched.
+// ─────────────────────────────────────────────────────────────────────────────
 
 import {
   Injectable, NotFoundException, Logger,
@@ -9,6 +14,19 @@ import { PrismaService } from '@futsmandu/database'
 import { InjectQueue } from '@nestjs/bullmq'
 import { Queue } from 'bullmq'
 import { MediaService } from '@futsmandu/media'
+import { ENV } from '@futsmandu/utils'
+
+function extractKeyFromCdnUrl(cdnUrl: string): string {
+  const base = ENV['S3_CDN_BASE_URL'] || ENV['S3_ENDPOINT'] || ''
+  if (base && cdnUrl.startsWith(base)) {
+    return cdnUrl.slice(base.replace(/\/+$/, '').length + 1)
+  }
+  try {
+    return new URL(cdnUrl).pathname.replace(/^\//, '')
+  } catch {
+    return cdnUrl
+  }
+}
 
 @Injectable()
 export class AdminVenuesService {
@@ -16,7 +34,7 @@ export class AdminVenuesService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly media: MediaService,   // ← replaces inline S3 code
+    private readonly media: MediaService,
     @InjectQueue('admin-emails') private readonly emailQueue: Queue,
   ) {}
 
@@ -29,6 +47,7 @@ export class AdminVenuesService {
         where: { isApproved: false, is_active: true },
         select: {
           id: true, name: true, slug: true, address: true,
+          cover_image_url: true,
           avg_rating: true, total_reviews: true, created_at: true,
           owner: { select: { id: true, name: true, email: true, phone: true, is_verified: true } },
           _count: { select: { courts: true } },
@@ -40,7 +59,19 @@ export class AdminVenuesService {
       this.prisma.venues.count({ where: { isApproved: false, is_active: true } }),
     ])
 
-    return { data: venues, meta: { page, total } }
+    // Additive: signed cover image URL for admin review panel
+    const enriched = await Promise.all(
+      venues.map(async (v: typeof venues[number]) => {
+        const cover_image_signed_url = v.cover_image_url
+          ? await this.media.getVenueImageSignedUrl(
+              extractKeyFromCdnUrl(v.cover_image_url),
+            ).catch(() => null)
+          : null
+        return { ...v, cover_image_signed_url }
+      }),
+    )
+
+    return { data: enriched, meta: { page, total } }
   }
 
   async listFlaggedVenues(page = 1) {
@@ -159,19 +190,33 @@ export class AdminVenuesService {
     return { message: 'Venue rejected', venueId }
   }
 
-  // ── Admin-only: signed GET URL for private KYC doc ────────────────────────
-  // CHANGED: no more inline S3Client — delegates to shared MediaService
+  // ── Admin-only: signed GET URL for KYC doc ─────────────────────────────────
+  // UPDATED: now uses getKycDocSignedUrl which handles any file extension
   async getOwnerDocUrl(ownerId: string, docType: string): Promise<{ downloadUrl: string; expiresIn: number }> {
-    const key = `owners/${ownerId}/kyc/${docType}.pdf`
-    return this.media.getSignedDownloadUrl({ key, expiresIn: 600 })
+    return this.media.getKycDocSignedUrl(ownerId, docType, 600)
   }
 
-  // Admin can also access venue verification images
+  // ── Admin venue verification image ─────────────────────────────────────────
+  // UPDATED: now uses getVenueVerificationSignedUrl
   async getVenueVerificationUrl(venueId: string, key: string): Promise<{ downloadUrl: string; expiresIn: number }> {
-    // Key must be under venues/{venueId}/verification/
-    if (!key.startsWith(`venues/${venueId}/verification/`)) {
-      throw new NotFoundException('Verification image not found for this venue')
-    }
-    return this.media.getSignedDownloadUrl({ key, expiresIn: 600 })
+    return this.media.getVenueVerificationSignedUrl(venueId, key, 600)
+  }
+
+  // ── Admin: list venue gallery (with signed URLs for admin review) ───────────
+  async getVenueGallery(venueId: string): Promise<Array<{
+    asset_id: string
+    cdn_url: string
+    signed_url: string | null
+    webp_url: string | null
+    uploaded_at: Date
+  }>> {
+    const images = await this.media.getGallerySignedUrls(venueId)
+    return images.map(img => ({
+      asset_id:    img.assetId,
+      cdn_url:     img.cdnUrl,
+      signed_url:  img.signedUrl ?? null,
+      webp_url:    img.webpUrl ?? null,
+      uploaded_at: img.uploadedAt,
+    }))
   }
 }
