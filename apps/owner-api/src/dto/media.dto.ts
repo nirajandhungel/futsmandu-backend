@@ -3,15 +3,15 @@
 
 import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator'
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
-import { AssetType, KycDocType } from '@futsmandu/media-core'
-
+import { KycDocType } from '@futsmandu/media-core'
+import { OWNER_ASSET_TYPES,OwnerAssetType } from '../modules/media/owner-asset-types.js'
 export class RequestUploadUrlDto {
   @ApiProperty({
-    enum: ['player_profile', 'owner_profile', 'venue_cover', 'venue_gallery', 'venue_verification', 'kyc_document'],
+    enum: OWNER_ASSET_TYPES,
     description: 'Type of asset to upload',
   })
-  @IsEnum(['player_profile', 'owner_profile', 'venue_cover', 'venue_gallery', 'venue_verification', 'kyc_document'])
-  assetType!: AssetType
+  @IsEnum(OWNER_ASSET_TYPES)
+  assetType!: OwnerAssetType
 
   @ApiProperty({
     description: 'Context-dependent entity ID: ownerId for profile/kyc, venueId for venue assets',
@@ -53,11 +53,11 @@ export class ConfirmUploadDto {
   key!: string
 
   @ApiProperty({
-    enum: ['player_profile', 'owner_profile', 'venue_cover', 'venue_gallery', 'venue_verification', 'kyc_document'],
+    enum: OWNER_ASSET_TYPES,
     description: 'Must match the assetType used when requesting the upload URL',
   })
-  @IsEnum(['player_profile', 'owner_profile', 'venue_cover', 'venue_gallery', 'venue_verification', 'kyc_document'])
-  assetType!: AssetType
+  @IsEnum(OWNER_ASSET_TYPES)
+  assetType!: OwnerAssetType
 }
 
 export class OwnerKycUploadUrlDto {
