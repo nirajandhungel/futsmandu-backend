@@ -58,17 +58,6 @@ export class RefreshTokenDto {
   refreshToken?: string
 }
 
-export class UploadDocDto {
-  @ApiProperty({ enum: ['citizenship', 'business_registration', 'business_pan'] })
-  @IsEnum(['citizenship', 'business_registration', 'business_pan'])
-  docType!: KycDocType
-
-  @ApiPropertyOptional({ enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] })
-  @IsEnum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf'])
-  @IsOptional()
-  contentType?: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'
-}
-
 // ── OTP Verification DTOs ────────────────────────────────────────────────────
 
 export class VerifyOtpDto {
