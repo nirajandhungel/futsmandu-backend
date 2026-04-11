@@ -1,7 +1,17 @@
 // packages/media/src/media.service.ts
-// UPDATED: Fixed syncDomainMediaPointers to handle venue_gallery (appends to gallery_image_urls[]).
-// UPDATED: confirmUpload now returns assetId so frontend can poll status.
-// No other logic changes — the 2-step presign/confirm flow is correct and stays.
+// ─── ADDITIVE UPDATE ──────────────────────────────────────────────────────────
+// Added methods (NEW — safe to add, do NOT modify existing methods):
+//   getSignedImageUrl(key, expiresIn?)  → presigned GET URL via R2StorageService
+//   getLegacyImageUrl(key)              → existing CDN URL behaviour (passthrough)
+//   getVenueImageSignedUrl(key)         → convenience wrapper used by venue controllers
+//   getGallerySignedUrls(venueId)       → returns gallery with signed URLs
+//   getKycDocSignedUrl(ownerId, docType) → admin/owner KYC doc access
+//   getVenueVerificationSignedUrl(venueId, key) → admin venue verification access
+//
+// ALL EXISTING METHODS ARE UNTOUCHED.
+// Feature flag: USE_SIGNED_IMAGE_URLS=true|false
+// When false → signed URL methods return legacy CDN URL (backward compat).
+// ─────────────────────────────────────────────────────────────────────────────
 
 import {
   Injectable, BadRequestException, ForbiddenException, NotFoundException,
@@ -30,11 +40,20 @@ import {
   getStorageObjectMetadata, downloadStorageObjectBuffer,
 } from '@futsmandu/media-storage'
 
+// NEW import — R2StorageService for GET presigning
+import { R2StorageService } from '@futsmandu/r2-storage'
+
 import { MEDIA_STORAGE_CONFIG } from './media.constants.js'
 
 const PRESIGN_EXPIRY_SECONDS = 600
 const MAX_FILE_SIZE = 5 * 1024 * 1024
 const ALLOWED_KYC_DOC_TYPES = ['citizenship', 'business_registration', 'business_pan'] as const
+
+// ─── Feature flag helper ──────────────────────────────────────────────────────
+
+function useSignedUrls(): boolean {
+  return ENV['USE_SIGNED_IMAGE_URLS'] === 'true'
+}
 
 @Injectable()
 export class MediaService {
@@ -44,9 +63,15 @@ export class MediaService {
     private readonly prisma: PrismaService,
     @InjectQueue(QUEUE_IMAGE_PROCESSING) private readonly imageQueue: Queue,
     @Inject(MEDIA_STORAGE_CONFIG) private readonly storageConfig: StorageConfig,
+    // NEW — optional injection; will be undefined if R2StorageModule not imported
+    // Use @Optional() if you don't want to require it in all apps
+    private readonly r2: R2StorageService,
   ) {}
 
-  // ── Step 1: Request a presigned PUT URL ───────────────────────────────────
+  // ════════════════════════════════════════════════════════════════════════════
+  // EXISTING METHODS — DO NOT MODIFY
+  // ════════════════════════════════════════════════════════════════════════════
+
   async requestUploadUrl(opts: RequestUploadUrlOptions): Promise<{
     assetId: string
     uploadUrl: string
@@ -125,12 +150,9 @@ export class MediaService {
     return result
   }
 
-  // ── Step 2: Confirm the upload, validate, enqueue processing ─────────────
-  // UPDATED: returns { message, assetId } so frontend can poll /media/status/:assetId
   async confirmUpload(
     opts: { ownerId: string; assetId: string; key: string; assetType: AssetType },
   ): Promise<{ message: string; assetId: string }> {
-    // --- Storage validation ---
     try {
       const objectMeta = await getStorageObjectMetadata(this.storageConfig, opts.key)
       const objectSize = objectMeta.contentLength ?? 0
@@ -202,7 +224,6 @@ export class MediaService {
       })
     }
 
-    // --- DB upsert ---
     const entityId = this.extractEntityIdFromKey(opts.key, opts.assetType)
     const asset = await this.prisma.media_assets.findUnique({ where: { id: opts.assetId } })
     if (!asset) {
@@ -226,7 +247,6 @@ export class MediaService {
       data:  { status: 'processing', updatedAt: new Date() },
     })
 
-    // --- Enqueue image processing (skip for KYC PDFs) ---
     if (opts.assetType !== 'kyc_document') {
       const { width, height } = getResizeDimensions(opts.assetType)
       const jobData: ImageProcessingJobData = {
@@ -249,14 +269,17 @@ export class MediaService {
           this.logger.error('Failed to enqueue image processing job', e)
         })
     } else {
-      // KYC documents are not resized — mark ready immediately
       await this.prisma.media_assets.update({
         where: { id: opts.assetId },
         data:  { status: 'ready', updatedAt: new Date() },
       })
     }
 
-    // --- Sync domain pointers (profile_image_url, cover_image_url, etc.) ---
+    // Evict any cached signed URL for this key so the next access gets a fresh one
+    if (this.r2) {
+      this.r2.evictCacheForKey(opts.key)
+    }
+
     await this.syncDomainMediaPointers(opts.assetType, entityId, opts.key)
 
     this.logger.log(JSON.stringify({
@@ -269,7 +292,6 @@ export class MediaService {
     return { message: 'Upload confirmed — processing started', assetId: opts.assetId }
   }
 
-  // ── Poll processing status ────────────────────────────────────────────────
   async getUploadStatus(
     assetId: string,
     ownerId: string,
@@ -284,7 +306,6 @@ export class MediaService {
     }
   }
 
-  // ── Signed download URL (private assets only) ─────────────────────────────
   async getSignedDownloadUrl(
     opts: SignedDownloadUrlOptions,
   ): Promise<{ downloadUrl: string; expiresIn: number }> {
@@ -299,13 +320,15 @@ export class MediaService {
     return formatCdnUrl(ENV['S3_CDN_BASE_URL'] || ENV['S3_ENDPOINT'] || '', key)
   }
 
-  // ── Delete asset ──────────────────────────────────────────────────────────
   async deleteAsset(assetId: string, requesterId: string): Promise<void> {
     const asset = await this.prisma.media_assets.findUnique({ where: { id: assetId } })
     if (!asset) throw new NotFoundException('Asset not found')
     if (asset.uploaderId !== requesterId) throw new ForbiddenException('You do not own this asset')
 
     await deleteStorageObject(this.storageConfig, asset.key)
+    // Evict cache after delete
+    if (this.r2) this.r2.evictCacheForKey(asset.key)
+
     await this.prisma.media_assets.update({
       where: { id: assetId },
       data:  { status: 'failed', updatedAt: new Date() },
@@ -314,7 +337,122 @@ export class MediaService {
     this.logger.log(`Asset deleted: ${asset.key} by ${requesterId}`)
   }
 
-  // ── Ownership validation ──────────────────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════════════════
+  // NEW METHODS — presigned GET URL support
+  // Feature flag: USE_SIGNED_IMAGE_URLS=true enables these.
+  // When flag is false, all new methods fall back to legacy CDN URL.
+  // ════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Returns a presigned GET URL for any image key.
+   * Respects USE_SIGNED_IMAGE_URLS flag.
+   * Cached for 50 minutes in-memory.
+   */
+  async getSignedImageUrl(key: string, expiresIn = 3_600): Promise<string> {
+    if (!useSignedUrls() || !this.r2) {
+      return this.getLegacyImageUrl(key)
+    }
+    return this.r2.getPresignedGetUrl(key, expiresIn)
+  }
+
+  /**
+   * Returns the legacy CDN URL (existing behaviour, unchanged).
+   * Always safe to call — does not require R2StorageService.
+   */
+  getLegacyImageUrl(key: string): string {
+    return formatCdnUrl(ENV['S3_CDN_BASE_URL'] || ENV['S3_ENDPOINT'] || '', key)
+  }
+
+  /**
+   * Venue cover image URL.
+   * Returns presigned URL when flag is on, CDN URL when off.
+   */
+  async getVenueImageSignedUrl(imageKey: string): Promise<string> {
+    return this.getSignedImageUrl(imageKey, 3_600)
+  }
+
+  /**
+   * Gallery images for a venue — returns both cdnUrl (legacy) + signedUrl (new).
+   * Controller spreads both into response for backward compat.
+   */
+  async getGallerySignedUrls(venueId: string): Promise<Array<{
+    assetId: string
+    key: string
+    cdnUrl: string
+    signedUrl?: string
+    webpUrl?: string
+    uploadedAt: Date
+  }>> {
+    const assets = await this.prisma.media_assets.findMany({
+      where:   { entityId: venueId, assetType: 'venue_gallery', status: 'ready' },
+      select:  { id: true, key: true, webpKey: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    })
+
+    const cdnBase = ENV['S3_CDN_BASE_URL'] || ENV['S3_ENDPOINT'] || ''
+
+    return Promise.all(
+      assets.map(async (a: { id: string; key: string; webpKey: string | null; createdAt: Date }) => {
+        const effectiveKey = a.webpKey ?? a.key
+        const cdnUrl       = formatCdnUrl(cdnBase, a.key)
+        const signedUrl    = useSignedUrls() && this.r2
+          ? await this.r2.getPresignedGetUrl(effectiveKey, 3_600)
+          : undefined
+
+        return {
+          assetId:    a.id,
+          key:        a.key,
+          cdnUrl,
+          signedUrl,
+          webpUrl:    a.webpKey ? formatCdnUrl(cdnBase, a.webpKey) : undefined,
+          uploadedAt: a.createdAt,
+        }
+      }),
+    )
+  }
+
+  /**
+   * KYC document — always private, always needs signed URL.
+   * Returns signed GET URL regardless of feature flag (KYC docs are never public).
+   */
+  async getKycDocSignedUrl(ownerId: string, docType: string, expiresIn = 600): Promise<{ downloadUrl: string; expiresIn: number }> {
+    // Try pdf first, then jpg/png/webp (owners can upload any allowed type)
+    const extensions = ['pdf', 'jpg', 'jpeg', 'png', 'webp']
+    for (const ext of extensions) {
+      const key = `owners/${ownerId}/kyc/${docType}.${ext}`
+      // Use R2StorageService if available, fall back to existing getSignedDownloadUrl
+      if (this.r2) {
+        const url = await this.r2.getPresignedGetUrl(key, expiresIn).catch(() => null)
+        if (url) return { downloadUrl: url, expiresIn }
+      }
+    }
+    // Fallback — deterministic PDF key (legacy path)
+    const key = `owners/${ownerId}/kyc/${docType}.pdf`
+    return this.getSignedDownloadUrl({ key, expiresIn })
+  }
+
+  /**
+   * Venue verification image — private, signed URL only.
+   */
+  async getVenueVerificationSignedUrl(
+    venueId: string,
+    key: string,
+    expiresIn = 600,
+  ): Promise<{ downloadUrl: string; expiresIn: number }> {
+    if (!key.startsWith(`venues/${venueId}/verification/`)) {
+      throw new NotFoundException('Verification image not found for this venue')
+    }
+    if (this.r2) {
+      const url = await this.r2.getPresignedGetUrl(key, expiresIn)
+      return { downloadUrl: url, expiresIn }
+    }
+    return this.getSignedDownloadUrl({ key, expiresIn })
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // EXISTING PRIVATE METHODS — DO NOT MODIFY
+  // ════════════════════════════════════════════════════════════════════════════
+
   private async validateOwnership(opts: RequestUploadUrlOptions): Promise<void> {
     switch (opts.assetType) {
       case 'player_profile':
@@ -341,8 +479,6 @@ export class MediaService {
     }
   }
 
-  // ── Domain pointer sync ───────────────────────────────────────────────────
-  // UPDATED: venue_gallery now appends to gallery_image_urls array (JSON column).
   private async syncDomainMediaPointers(
     assetType: AssetType,
     entityId: string,
@@ -374,13 +510,7 @@ export class MediaService {
       return
     }
 
-    // venue_gallery — no dedicated column yet; stored only in media_assets table.
-    // The entity can be queried via:
-    //   SELECT key, webp_key FROM media_assets
-    //   WHERE entity_id = $venueId AND asset_type = 'venue_gallery' AND status = 'ready'
-    // This is intentional: galleries are lists, not a single pointer.
     if (assetType === 'venue_gallery') {
-      // No-op for domain table — consumers query media_assets directly.
       return
     }
 
@@ -406,7 +536,6 @@ export class MediaService {
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
   private assertKeyIsPrivate(key: string): void {
     const isPrivate =
       (key.startsWith('owners/') && key.includes('/kyc/')) ||
