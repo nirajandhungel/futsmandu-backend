@@ -52,6 +52,8 @@ export const ENV = {
   S3_BUCKET:           process.env['S3_BUCKET']           as string,
   S3_FORCE_PATH_STYLE: process.env['S3_FORCE_PATH_STYLE'] as string,
   S3_CDN_BASE_URL:     process.env['S3_CDN_BASE_URL']     as string,
+  USE_SIGNED_IMAGE_URLS: process.env['USE_SIGNED_IMAGE_URLS'] ?? 'false',
+
 
   // ── Notifications ──────────────────────────────────────────────────────────
   FIREBASE_SERVICE_ACCOUNT: process.env['FIREBASE_SERVICE_ACCOUNT'] as string,
