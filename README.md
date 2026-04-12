@@ -43,25 +43,415 @@ NGINX (port 80)
 ## Monorepo Structure
 
 ```
-futsmandu-backend/
-├── apps/
-│   ├── player-api/          NestJS + Fastify — Player-facing (auth, bookings, payments, social, discovery)
-│   └── owner-admin-api/     NestJS + Express — Owner/Admin (venue mgmt, analytics, moderation)
-├── packages/
-│   ├── database/            PrismaService + PrismaModule + schema.prisma (shared by both apps)
-│   ├── redis/               RedisService (Upstash REST + ioredis for BullMQ)
-│   ├── auth/                JwtStrategy + JwtAuthGuard + @CurrentUser() + @Public()
-│   ├── logger/              AppLogger (structured JSON)
-│   ├── types/               Shared TypeScript interfaces
-│   └── utils/               Pricing engine, haversine, time helpers, NotificationFactory
-├── infrastructure/
-│   ├── nginx/               nginx.conf + proxy_params
-│   ├── docker/              player.Dockerfile, worker.Dockerfile, owner.Dockerfile
-│   └── docker-compose.yml   Full stack
-└── scripts/
-    ├── migrate.sh            Run Prisma migrations + critical indexes
-    └── dev.sh                Start dev stack with hot-reload
-```
+FUTSMANDU-SERVER
+├── apps
+│   ├── admin-api
+│   │   └── src
+│   │       ├── common
+│   │       │   ├── decorators
+│   │       │   │   └── current-admin.decorator.ts
+│   │       │   ├── filters
+│   │       │   │   └── all-exceptions.filter.ts
+│   │       │   ├── guards
+│   │       │   │   ├── admin-jwt.guard.ts
+│   │       │   │   └── roles.guard.ts
+│   │       │   ├── interceptors
+│   │       │   │   ├── audit.interceptor.ts
+│   │       │   │   └── response.interceptor.ts
+│   │       │   └── middleware
+│   │       │       └── ip-whitelist.middleware.ts
+│   │       ├── dto
+│   │       │   └── media.dto.ts
+│   │       ├── modules
+│   │       │   ├── analytics
+│   │       │   │   ├── analytics.controller.ts
+│   │       │   │   ├── analytics.module.ts
+│   │       │   │   └── analytics.service.ts
+│   │       │   ├── auth
+│   │       │   │   ├── dto
+│   │       │   │   │   └── admin-auth.dto.ts
+│   │       │   │   ├── auth.controller.ts
+│   │       │   │   ├── auth.module.ts
+│   │       │   │   └── auth.service.ts
+│   │       │   ├── booking
+│   │       │   │   ├── dto
+│   │       │   │   │   └── booking.dto.ts
+│   │       │   │   ├── admin-booking.controller.ts
+│   │       │   │   ├── admin-booking.module.ts
+│   │       │   │   └── admin-booking.service.ts
+│   │       │   ├── health
+│   │       │   │   ├── health.controller.ts
+│   │       │   │   └── health.module.ts
+│   │       │   ├── media
+│   │       │   │   ├── media.controller.ts
+│   │       │   │   └── media.module.ts
+│   │       │   ├── payment
+│   │       │   │   ├── dto
+│   │       │   │   │   └── admin-payment.dto.ts
+│   │       │   │   ├── payment.controller.ts
+│   │       │   │   ├── payment.module.ts
+│   │       │   │   └── payment.service.ts
+│   │       │   ├── penalties
+│   │       │   │   ├── penalties.controller.ts
+│   │       │   │   ├── penalties.module.ts
+│   │       │   │   └── penalties.service.ts
+│   │       │   ├── players
+│   │       │   │   ├── players.controller.ts
+│   │       │   │   ├── players.module.ts
+│   │       │   │   └── players.service.ts
+│   │       │   ├── review-and-moderation
+│   │       │   │   ├── admin-moderation.controller.ts
+│   │       │   │   ├── admin-moderation.module.ts
+│   │       │   │   └── admin-moderation.service.ts
+│   │       │   └── venues
+│   │       │       ├── admin-venues.controller.ts
+│   │       │       ├── admin-venues.module.ts
+│   │       │       └── admin-venues.service.ts
+│   │       ├── scripts
+│   │       │   ├── seed-admin.ts
+│   │       │   └── seed-config.ts
+│   │       ├── workers
+│   │       │   ├── processors
+│   │       │   │   └── email.processor.ts
+│   │       │   ├── main.ts
+│   │       │   └── worker.module.ts
+│   │       ├── app.module.ts
+│   │       ├── instrument.ts
+│   │       └── main.ts
+│   │   ├── nest-cli.json
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── owner-api
+│   │   └── src
+│   │       ├── common
+│   │       │   ├── decorators
+│   │       │   │   └── current-owner.decorator.ts
+│   │       │   ├── filters
+│   │       │   │   └── all-exceptions.filter.ts
+│   │       │   ├── guards
+│   │       │   │   ├── owner-jwt.guard.ts
+│   │       │   │   └── roles.guard.ts
+│   │       │   └── interceptors
+│   │       │       └── response.interceptor.ts
+│   │       ├── dto
+│   │       │   └── media.dto.ts
+│   │       ├── modules
+│   │       │   ├── analytics
+│   │       │   │   ├── analytics.controller.ts
+│   │       │   │   ├── analytics.module.ts
+│   │       │   │   └── analytics.service.ts
+│   │       │   ├── bookings
+│   │       │   │   ├── dto
+│   │       │   │   │   └── booking.dto.ts
+│   │       │   │   ├── bookings.controller.ts
+│   │       │   │   ├── bookings.module.ts
+│   │       │   │   └── bookings.service.ts
+│   │       │   ├── courts
+│   │       │   │   ├── courts.controller.ts
+│   │       │   │   ├── courts.module.ts
+│   │       │   │   └── courts.service.ts
+│   │       │   ├── health
+│   │       │   │   ├── health.controller.ts
+│   │       │   │   └── health.module.ts
+│   │       │   ├── media
+│   │       │   │   ├── media.controller.ts
+│   │       │   │   └── media.module.ts
+│   │       │   ├── notifications
+│   │       │   │   ├── notifications.module.ts
+│   │       │   │   └── notifications.service.ts
+│   │       │   ├── owner-auth
+│   │       │   │   ├── dto
+│   │       │   │   │   └── owner-auth.dto.ts
+│   │       │   │   ├── owner-auth.controller.ts
+│   │       │   │   ├── owner-auth.module.ts
+│   │       │   │   └── owner-auth.service.ts
+│   │       │   ├── owner-payment
+│   │       │   │   ├── dto
+│   │       │   │   │   └── owner-payment.dto.ts
+│   │       │   │   ├── owner-payment.controller.ts
+│   │       │   │   ├── owner-payment.module.ts
+│   │       │   │   └── owner-payment.service.ts
+│   │       │   ├── pricing
+│   │       │   │   ├── dto
+│   │       │   │   │   └── pricing.dto.ts
+│   │       │   │   ├── pricing.controller.ts
+│   │       │   │   ├── pricing.module.ts
+│   │       │   │   └── pricing.service.ts
+│   │       │   ├── staff
+│   │       │   │   ├── dto
+│   │       │   │   │   └── staff.dto.ts
+│   │       │   │   ├── staff.controller.ts
+│   │       │   │   ├── staff.module.ts
+│   │       │   │   └── staff.service.ts
+│   │       │   └── venue-management
+│   │       │       ├── dto
+│   │       │       │   └── venue.dto.ts
+│   │       │       ├── venue-management.controller.ts
+│   │       │       ├── venue-management.module.ts
+│   │       │       └── venue-management.service.ts
+│   │       ├── workers
+│   │       │   ├── processors
+│   │       │   │   ├── email.processor.ts
+│   │       │   │   ├── notification.processor.ts
+│   │       │   │   └── sms.processor.ts
+│   │       │   ├── main.ts
+│   │       │   └── worker.module.ts
+│   │       ├── app.module.ts
+│   │       ├── instrument.ts
+│   │       └── main.ts
+│   │   ├── nest-cli.json
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   └── player-api
+│       └── src
+│           ├── common
+│           │   ├── decorators
+│           │   │   └── index.ts
+│           │   ├── filters
+│           │   │   └── all-exceptions.filter.ts
+│           │   ├── interceptors
+│           │   │   └── response.interceptor.ts
+│           │   └── pipes
+│           │       └── sanitize.pipe.ts
+│           ├── dto
+│           │   └── media.dto.ts
+│           ├── modules
+│           │   ├── auth
+│           │   │   ├── dto
+│           │   │   │   └── auth.dto.ts
+│           │   │   ├── auth.controller.ts
+│           │   │   ├── auth.module.ts
+│           │   │   └── auth.service.ts
+│           │   ├── booking
+│           │   │   ├── dto
+│           │   │   │   └── booking.dto.ts
+│           │   │   ├── booking-lifecycle.service.ts
+│           │   │   ├── booking-match.service.ts
+│           │   │   ├── booking.controller.ts
+│           │   │   ├── booking.module.ts
+│           │   │   └── booking.service.ts
+│           │   ├── discovery
+│           │   │   ├── discovery.controller.ts
+│           │   │   ├── discovery.module.ts
+│           │   │   └── discovery.service.ts
+│           │   ├── friend
+│           │   │   ├── friend.controller.ts
+│           │   │   ├── friend.module.ts
+│           │   │   └── friend.service.ts
+│           │   ├── health
+│           │   │   ├── health.controller.ts
+│           │   │   └── health.module.ts
+│           │   ├── match
+│           │   │   ├── match.controller.ts
+│           │   │   ├── match.module.ts
+│           │   │   └── match.service.ts
+│           │   ├── notification
+│           │   │   ├── notification.controller.ts
+│           │   │   ├── notification.module.ts
+│           │   │   └── notification.service.ts
+│           │   ├── payment
+│           │   │   ├── dto
+│           │   │   │   └── payment.dto.ts
+│           │   │   ├── payment.controller.ts
+│           │   │   ├── payment.module.ts
+│           │   │   └── payment.service.ts
+│           │   ├── profile
+│           │   │   ├── profile.controller.ts
+│           │   │   ├── profile.module.ts
+│           │   │   └── profile.service.ts
+│           │   └── venue
+│           │       ├── venue.controller.ts
+│           │       ├── venue.module.ts
+│           │       └── venue.service.ts
+│           ├── workers
+│           │   ├── processors
+│           │   │   ├── email.processor.ts
+│           │   │   ├── media-orphan-cleanup.processor.ts
+│           │   │   ├── notification.processor.ts
+│           │   │   ├── owner-payout.processor.ts
+│           │   │   ├── payment-recon.processor.ts
+│           │   │   ├── payout-reconciler.processor.ts
+│           │   │   ├── refund.processor.ts
+│           │   │   ├── slot-expiry.processor.ts
+│           │   │   ├── sms.processor.ts
+│           │   │   └── stats.processor.ts
+│           │   ├── main.ts
+│           │   ├── scheduler.service.ts
+│           │   └── worker.module.ts
+│           ├── app.module.ts
+│           ├── instrument.ts
+│           └── main.ts
+│       ├── nest-cli.json
+│       ├── package.json
+│       └── tsconfig.json
+│
+├── infrastructure
+│
+├── docker
+│   ├── admin-api.Dockerfile
+│   ├── admin-worker.Dockerfile
+│   ├── owner-api.Dockerfile
+│   ├── owner-worker.Dockerfile
+│   ├── player.Dockerfile
+│   └── worker.Dockerfile
+│
+├── nginx
+│   ├── sites-available
+│   │   └── futsmandu-routes.conf
+│   ├── nginx.conf
+│   └── proxy_params
+│
+├── packages
+│   ├── auth
+│   │   ├── src
+│   │   │   ├── guards.ts
+│   │   │   ├── index.ts
+│   │   │   ├── jwt.strategy.ts
+│   │   │   ├── otp.service.ts
+│   │   │   ├── refresh-token.service.ts
+│   │   │   ├── refresh-token.strategy.ts
+│   │   │   ├── roles.decorator.ts
+│   │   │   └── roles.guard.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── database
+│   │   ├── generated
+│   │   ├── prisma
+│   │   │   ├── migrations
+│   │   │   │   ├── 001_critical_indexes.sql
+│   │   │   │   ├── 002_refresh_token_version.sql
+│   │   │   │   ├── 003_admin_audit_log.sql
+│   │   │   │   ├── 004_owner_fcm_token.sql
+│   │   │   │   ├── 005_media_assets.sql
+│   │   │   │   └── 006_flexible_bookings_match_join.sql
+│   │   │   └── schema.prisma
+│   │   ├── src
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── esewa-payout
+│   │   ├── src
+│   │   │   ├── esewa-payout.module.ts
+│   │   │   ├── esewa-payout.service.ts
+│   │   │   ├── index.ts
+│   │   │   └── payout.service.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── logger
+│   │   ├── src
+│   │   │   ├── index.ts
+│   │   │   └── logger.service.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── media
+│   │   ├── src
+│   │   │   ├── index.ts
+│   │   │   ├── media.module.ts
+│   │   │   ├── media.service.ts
+│   │   │   └── storage.module.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── media-core
+│   │   ├── src
+│   │   │   ├── interfaces
+│   │   │   ├── index.ts
+│   │   │   └── media-key.util.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── media-processing
+│   │   ├── src
+│   │   │   ├── image-processing.processor.ts
+│   │   │   └── index.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── media-storage
+│   │   ├── src
+│   │   │   ├── index.ts
+│   │   │   ├── storage.module.ts
+│   │   │   └── storage.service.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── queues
+│   │   ├── src
+│   │   │   ├── index.ts
+│   │   │   ├── queue.constants.ts
+│   │   │   └── queues.module.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── redis
+│   │   ├── src
+│   │   │   ├── index.ts
+│   │   │   ├── redis.module.ts
+│   │   │   └── redis.service.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── sentry
+│   │   ├── src
+│   │   │   ├── capture.ts
+│   │   │   ├── index.ts
+│   │   │   └── init.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   ├── types
+│   │   ├── src
+│   │   │   └── index.ts
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   │
+│   └── utils
+│       ├── src
+│       │   ├── env.config.ts
+│       │   ├── helpers.ts
+│       │   ├── index.ts
+│       │   ├── notification-factory.ts
+│       │   └── pricing-engine.ts
+│       ├── package.json
+│       └── tsconfig.json
+│
+├── scripts
+│   ├── dev.sh
+│   ├── migrate.sh
+│   ├── validate-env.mjs
+│   └── worker-health.mjs
+│
+├── .dockerignore
+├── .env
+├── .env.example
+├── .gitignore
+├── .npmrc
+├── admin-api-testing-guide.md
+├── admin-api.rest
+├── backup.env
+├── DOCKER_HANDOFF.md
+├── docker-compose.yml
+├── owner-api.rest
+├── package.json
+├── player-api-testing-guide.md
+├── player-api.rest
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml
+├── README.md
+├── seed-config.example.json
+├── seed-config.local.json
+├── tsconfig.base.json
+├── tsconfig.json
+└── turbo.json
+
+
+
+
 
 ## Quick Start
 
