@@ -669,14 +669,18 @@ model media_assets {
   uploaderId String   @map("uploader_id") @db.Uuid
   entityId   String   @map("entity_id")
   webpKey    String?  @map("webp_key")
+  thumbKey   String?  @map("thumb_key")   // 400×300 WebP thumbnail key, set by processor
+  progress   Int      @default(0) @db.SmallInt  // 0-100, updated by BullMQ processor stages
   metadata   Json?
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   @@index([entityId, assetType])
   @@index([status])
+  @@index([uploaderId, status])  // hot path: status polling
   @@map("media_assets")
 }
+
 
 model invite_tokens {
   id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
