@@ -1,4 +1,4 @@
-// packages/media/src/interfaces/media.interfaces.ts
+// packages/media-core/src/interfaces/media.interfaces.ts
 // Single source of truth for all media types across the platform.
 
 export type AssetType =
@@ -16,7 +16,6 @@ export type KycDocType =
   | 'business_registration'
   | 'business_pan'
 
-// Whether the asset should be accessible publicly via CDN
 export const PUBLIC_ASSET_TYPES: AssetType[] = [
   'player_profile',
   'owner_profile',
@@ -30,39 +29,61 @@ export const PRIVATE_ASSET_TYPES: AssetType[] = [
 ]
 
 export interface RequestUploadUrlOptions {
-  assetType: AssetType
-  ownerId: string        // The authenticated user/owner making the request
-  entityId: string       // playerId, ownerId, venueId — context-dependent
-  docType?: KycDocType   // Only for kyc_document
-  contentType?: string   // Defaults to image/jpeg for images, application/pdf for docs
+  assetType:    AssetType
+  ownerId:      string
+  entityId:     string
+  docType?:     KycDocType
+  contentType?: string
 }
 
 export interface UploadUrlResult {
-  assetId: string
+  assetId:   string
   uploadUrl: string
-  key: string
-  cdnUrl?: string        // Only for public assets
-  expiresIn: number      // Seconds
+  key:       string
+  cdnUrl?:   string   // only for public assets
+  expiresIn: number
 }
 
 export interface ConfirmUploadOptions {
-  ownerId: string
-  assetId: string
-  key: string
+  ownerId:   string
+  assetId:   string
+  key:       string
   assetType: AssetType
 }
 
+export interface ConfirmUploadResult {
+  message:  string
+  assetId:  string
+  webpKey?: string | null
+}
+
 export interface SignedDownloadUrlOptions {
-  key: string
+  key:       string
   expiresIn?: number  // default 600s
 }
 
 // Job payload pushed to BullMQ image-processing queue
 export interface ImageProcessingJobData {
-  assetId: string
-  key: string
-  bucket: string
-  assetType: AssetType
-  targetWidth: number
+  assetId:      string
+  key:          string
+  bucket:       string
+  assetType:    AssetType
+  targetWidth:  number
   targetHeight: number
+}
+
+export interface GalleryItem {
+  assetId:    string
+  key:        string
+  cdnUrl:     string
+  signedUrl?: string
+  webpUrl?:   string
+  uploadedAt: Date
+}
+
+export interface UploadStatusResult {
+  status:   AssetStatus
+  progress: number  // 0-100
+  webpKey?: string | null
+  error?:   string
 }
