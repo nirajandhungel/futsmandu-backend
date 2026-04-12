@@ -1,3 +1,3 @@
-export * from './media.constants.js'
-export * from './media.module.js'
-export * from './media.service.js'
+export { MediaService }  from './media.service.js'
+export { MediaModule }   from './media.module.js'
+export { StorageModule } from './storage.module.js'
