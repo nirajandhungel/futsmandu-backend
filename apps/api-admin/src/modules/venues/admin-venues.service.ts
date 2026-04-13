@@ -38,6 +38,27 @@ export class AdminVenuesService {
     @InjectQueue('admin-emails') private readonly emailQueue: Queue,
   ) {}
 
+  async listAllVenues(page = 1) {
+    const PAGE_SIZE = 20
+    const skip = (page - 1) * PAGE_SIZE
+
+    const [venues, total] = await Promise.all([
+      this.prisma.venues.findMany({
+        select: {
+          id: true, name: true, slug: true, is_verified: true, is_active: true,
+          avg_rating: true, total_reviews: true, amenities: true, created_at: true,
+          owner: { select: { id: true, name: true, email: true } },
+        },
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: PAGE_SIZE,
+      }),
+      this.prisma.venues.count({
+      })
+    ])
+    return { data: venues, meta: { page, total } }
+  }
+
   async listPendingVenues(page = 1) {
     const PAGE_SIZE = 20
     const skip = (page - 1) * PAGE_SIZE

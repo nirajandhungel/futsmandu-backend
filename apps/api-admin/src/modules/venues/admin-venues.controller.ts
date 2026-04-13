@@ -44,7 +44,7 @@ export class AdminVenuesController {
   ) {}
 
   // ── EXISTING endpoints ──────────────────────────────────────────────────────
-
+  
   @Get('venues/pending')
   @ApiOperation({ summary: 'List venues pending verification' })
   pending(@Query('page') page?: number) {
@@ -88,6 +88,13 @@ export class AdminVenuesController {
   }
 
   // ── NEW endpoints ───────────────────────────────────────────────────────────
+
+    @Get('venues')
+  @ApiOperation({ summary: 'List all venues with pagination' })
+  list(@Query('page') page?: number) {
+    return this.adminVenues.listAllVenues(page)
+  }
+
 
   @Get('venues/:id/gallery')
   @ApiParam({ name: 'id', description: 'Venue UUID' })
