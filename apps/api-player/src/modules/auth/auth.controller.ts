@@ -71,14 +71,18 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Login and receive access + refresh tokens' })
+  @ApiOperation({ summary: 'Login and receive both tokens in JSON (mobile best practice)' })
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
     const result = await this.authService.login(dto)
     void reply.setCookie('refreshToken', result.refreshToken, COOKIE_OPTS)
-    return { accessToken: result.accessToken, user: result.user }
+    return {
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      user: result.user,
+    }
   }
 
   @Public()
