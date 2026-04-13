@@ -110,13 +110,15 @@ Request body (`LoginOwnerDto`):
 - `password` (string, required)
 
 Server behavior:
-- Sets refresh cookie `owner_refresh`
+- Returns **both tokens in JSON** (mobile best practice)
+- Also sets refresh cookie `owner_refresh` for backward compatibility with web clients
 
 Success response:
 ```json
 {
   "data": {
     "accessToken": "JWT_ACCESS_TOKEN",
+    "refreshToken": "JWT_REFRESH_TOKEN",
     "owner": {
       "id": "uuid",
       "name": "string",
@@ -129,6 +131,9 @@ Success response:
   }
 }
 ```
+
+**Mobile clients**: Use the `refreshToken` from the response body (recommended).  
+**Web clients**: Can use either the `refreshToken` from body or the `owner_refresh` cookie.
 
 ### Refresh
 `POST /api/v1/owner/auth/refresh`
