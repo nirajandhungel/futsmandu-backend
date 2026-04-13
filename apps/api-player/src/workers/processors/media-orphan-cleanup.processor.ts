@@ -27,55 +27,86 @@ export class MediaOrphanCleanupProcessor extends WorkerHost {
   }
 
   async process(): Promise<void> {
-    const maxAgeHours = Number.isFinite(ENV['MEDIA_ORPHAN_MAX_AGE_HOURS']) ? ENV['MEDIA_ORPHAN_MAX_AGE_HOURS'] : 24
+    const maxAgeHours = Number.isFinite(ENV['MEDIA_ORPHAN_MAX_AGE_HOURS']) 
+      ? ENV['MEDIA_ORPHAN_MAX_AGE_HOURS'] 
+      : 12  // Reduced from 24h to 12h for faster recovery
     const cutoff = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000)
+    const batchSize = 500
 
     this.logger.log(`Scanning for orphan media uploads (status = processing, age > ${maxAgeHours}h)`)
 
-    const orphans = await this.prisma.media_assets.findMany({
-      where: {
-        status: 'processing',
-        updatedAt: { lt: cutoff },
-      },
-      select: {
-        id: true,
-        key: true,
-      },
-      take: 500,
-      orderBy: { updatedAt: 'asc' },
-    })
+    let totalProcessed = 0
+    let totalDeleted = 0
+    let totalFailed = 0
+    let hasMore = true
 
-    if (orphans.length === 0) {
-      this.logger.log('No orphan media uploads found')
-      return
-    }
+    while (hasMore) {
+      const orphans = await this.prisma.media_assets.findMany({
+        where: {
+          status: 'processing',
+          updatedAt: { lt: cutoff },
+        },
+        select: {
+          id: true,
+          key: true,
+        },
+        take: batchSize,
+        orderBy: { updatedAt: 'asc' },
+      })
 
-    this.logger.log(`Found ${orphans.length} orphan media assets`)
-    this.logger.log('Deleting from R2 + marking DB as expired')
+      if (orphans.length === 0) {
+        hasMore = false
+        break
+      }
 
-    let deleted = 0
-    let failed = 0
+      totalProcessed += orphans.length
+      this.logger.log(`Processing batch: ${orphans.length} orphan assets`)
 
-    for (const orphan of orphans) {
-      this.logger.log(`Deleting orphan asset: ${orphan.id} (R2 key: ${orphan.key})`)
-      try {
-        const exists = await this.objectExists(orphan.key)
-        if (exists) {
-          await this.deleteObject(orphan.key)
-        }
-        await this.prisma.media_assets.update({
-          where: { id: orphan.id },
-          data: { status: 'failed', updatedAt: new Date() },
-        })
-        deleted += 1
-      } catch (err) {
-        failed += 1
-        this.logger.error(`Failed deleting orphan asset ${orphan.id}: ${String(err)}`)
+      // Process in parallel batches of 10 to avoid overwhelming S3
+      const parallelBatches = 10
+      for (let i = 0; i < orphans.length; i += parallelBatches) {
+        const batch = orphans.slice(i, i + parallelBatches)
+        
+        const results = await Promise.allSettled(
+          batch.map(async (orphan: { id: string; key: string }) => {
+            try {
+              const exists = await this.objectExists(orphan.key)
+              if (exists) {
+                await this.deleteObject(orphan.key)
+              }
+              await this.prisma.media_assets.update({
+                where: { id: orphan.id },
+                data: { status: 'failed', updatedAt: new Date() },
+              })
+              return { success: true, id: orphan.id }
+            } catch (err) {
+              this.logger.error(
+                `Failed deleting orphan asset ${orphan.id}: ${String(err)}`,
+              )
+              return { success: false, id: orphan.id }
+            }
+          }),
+        )
+
+        const batchDeleted = results.filter((r) => r.status === 'fulfilled' && r.value?.success).length
+        const batchFailed = results.filter((r) => r.status !== 'fulfilled' || !r.value?.success).length
+        totalDeleted += batchDeleted
+        totalFailed += batchFailed
+
+        this.logger.log(
+          `Batch complete: Deleted ${batchDeleted} | Failed ${batchFailed} | Running total: ${totalDeleted}/${totalProcessed}`,
+        )
+      }
+
+      // Stop if we got fewer than batchSize (means we're at the end)
+      if (orphans.length < batchSize) {
+        hasMore = false
       }
     }
 
-    const remaining = Math.max(orphans.length - deleted - failed, 0)
-    this.logger.log(`Cleanup complete. Deleted: ${deleted} | Failed: ${failed} | Remaining: ${remaining}`)
+    this.logger.log(
+      `✅ Orphan cleanup complete. Total processed: ${totalProcessed} | Deleted: ${totalDeleted} | Failed: ${totalFailed}`,
+    )
   }
 
   private async objectExists(key: string): Promise<boolean> {
