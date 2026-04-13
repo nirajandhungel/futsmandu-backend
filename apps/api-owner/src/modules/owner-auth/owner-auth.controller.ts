@@ -37,11 +37,15 @@ export class OwnerAuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Login — returns access token + sets refresh cookie' })
+  @ApiOperation({ summary: 'Login — returns both tokens + owner data (mobile-optimized)' })
   async login(@Body() dto: LoginOwnerDto, @Res({ passthrough: true }) res: FastifyReply) {
     const result = await this.ownerAuth.login(dto)
     void res.setCookie(REFRESH_COOKIE, result.refreshToken, COOKIE_OPTS)
-    return { accessToken: result.accessToken, owner: result.owner }
+    return {
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      owner: result.owner,
+    }
   }
 
   @Public()
