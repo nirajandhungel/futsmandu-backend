@@ -99,14 +99,23 @@ export class MediaController {
     })
   }
 
+  @Get('kyc')
+  @ApiOperation({
+    summary: 'Get all KYC documents',
+    description: 'Returns array of all uploaded KYC documents with 10-minute signed download URLs.',
+  })
+  getAllKycDocuments(@CurrentOwner() owner: { id: string }) {
+    return this.media.getAllKycDocUrls(owner.id)
+  }
+
   @Post('kyc/view-url')
   @ApiOperation({
-    summary: 'Get signed URL to view your KYC document',
-    description: 'Returns a 10-minute signed GET URL. KYC docs are always private.',
+    summary: '[DEPRECATED] Get signed URL to view your KYC document',
+    description: 'Deprecated: Use GET /kyc instead. Returns a 10-minute signed GET URL.',
   })
   getKycViewUrl(
     @CurrentOwner() owner: { id: string },
-    @Body('docType') docType: string,
+    @Body('docType') docType?: string,
   ) {
     return this.media.getKycDocUrl(owner.id, docType)
   }
