@@ -31,7 +31,7 @@ import { StorageService } from '@futsmandu/media-storage'
 
 const PRESIGN_UPLOAD_EXPIRY_S = 600        // 10 min — time client has to PUT the file
 const PRESIGN_GET_EXPIRY_S    = 3_600      // 1 hour — time client can display the image
-const PRESIGN_PRIVATE_EXPIRY_S = 600       // 10 min — KYC / verification docs
+const PRESIGN_PRIVATE_EXPIRY_S = 3_600     // 1 hour — KYC / verification docs (matches public assets)
 const MAX_FILE_SIZE           = 10 * 1024 * 1024  // 10 MB
 const ALLOWED_KYC_DOC_TYPES   = ['citizenship', 'business_registration', 'business_pan'] as const
 
@@ -88,10 +88,20 @@ export class MediaService {
       create: {
         key, assetType: opts.assetType, status: 'pending',
         uploaderId: opts.ownerId, entityId: opts.entityId,
+        metadata: {
+          docType: opts.docType,
+          contentType: contentType,
+          uploadedAt: new Date().toISOString(),
+        },
       },
       update: {
         assetType: opts.assetType, status: 'pending',
         uploaderId: opts.ownerId, entityId: opts.entityId,
+        metadata: {
+          docType: opts.docType,
+          contentType: contentType,
+          uploadedAt: new Date().toISOString(),
+        },
         webpKey: null, thumbKey: null, updatedAt: new Date(),
       },
     })
@@ -131,7 +141,7 @@ export class MediaService {
   }): Promise<ConfirmUploadResult> {
     // ── Phase 1: Parallel file validation — metadata + magic bytes ───────────
     const [objectMeta, magicBuffer] = await Promise.all([
-      this.storage.getMetadata(opts.key).catch(err => {
+      this.storage.getMetadata(opts.key).catch((err: any) => {
         if (this.isNotFoundError(err)) {
           throw new BadRequestException(
             'File not found in storage. Upload to the presigned URL first, then call confirm-upload.',
@@ -186,23 +196,35 @@ export class MediaService {
     const entityId = this.extractEntityIdFromKey(opts.key, opts.assetType)
     if (asset.entityId !== entityId)         throw new BadRequestException('Entity mismatch for this upload session')
 
-    // ── Phase 3: Parallel side-effects ──────────────────────────────────────
-    await Promise.all([
-      this.prisma.media_assets.update({
+    // ── Phase 3: Critical-path — update status (MUST complete synchronously) ─
+    // Only await DB update. Queue + side-effects happen async in background.
+    if (opts.assetType === 'kyc_document') {
+      await this.prisma.media_assets.update({
+        where: { id: opts.assetId },
+        data:  { status: 'ready', updatedAt: new Date() },
+      })
+    } else {
+      await this.prisma.media_assets.update({
         where: { id: asset.id },
         data:  { status: 'processing', updatedAt: new Date() },
-      }),
+      })
+    }
 
-      opts.assetType !== 'kyc_document'
-        ? this.enqueueProcessing(opts.assetId, opts.key, opts.assetType)
-        : this.prisma.media_assets.update({
-            where: { id: opts.assetId },
-            data:  { status: 'ready', updatedAt: new Date() },
-          }),
+    // ── Phase 4: Non-critical async in background (fire-and-forget) ──────────
+    // 🔥 CRITICAL: Do NOT await these:
+    // - queue.add() can take 10-50ms per call (Redis latency)
+    // - syncDomainPointers() can take 50-200ms (DB query)
+    // - storage.evict() is synchronous and best-effort
+    //
+    // Client only needs the DB status update above. These are best-effort.
+    this.enqueueProcessing(opts.assetId, opts.key, opts.assetType)
+      .catch((e: unknown) => this.logger.error('Failed to enqueue processing (async)', e))
 
-      this.syncDomainPointers(opts.assetType, entityId, opts.key).catch(() => {}),
-      this.storage.evict(opts.key),
-    ])
+    this.syncDomainPointers(opts.assetType, entityId, opts.key)
+      .catch((e: unknown) => this.logger.error('Failed to sync domain pointers (async)', e))
+
+    // Evict is synchronous, call directly (best-effort cache invalidation)
+    this.storage.evict(opts.key)
 
     this.logger.log(JSON.stringify({
       event: 'UPLOAD_CONFIRMED', ownerId: opts.ownerId,
@@ -291,19 +313,77 @@ export class MediaService {
 
   /**
    * Signed URL for a KYC document. Always uses short expiry (private asset).
+   * 
+   * 🔥 FIX: Query DB for stored asset instead of rebuilding filename.
+   * This prevents the "undefined.pdf" bug when docType is missing.
    */
   async getKycDocUrl(
     ownerId: string,
-    docType: string,
+    docType?: string,
     expiresIn = PRESIGN_PRIVATE_EXPIRY_S,
   ): Promise<{ downloadUrl: string; expiresIn: number }> {
-    const extensions = ['pdf', 'jpg', 'jpeg', 'png', 'webp']
-    for (const ext of extensions) {
-      const key = `owners/${ownerId}/kyc/${docType}.${ext}`
-      const url = await this.storage.presignGet(key, expiresIn).catch(() => null)
-      if (url) return { downloadUrl: url, expiresIn }
+    // Query DB for the actual stored KYC asset key
+    const asset = await this.prisma.media_assets.findFirst({
+      where: {
+        entityId: ownerId,
+        assetType: 'kyc_document',
+        status: 'ready', // Only return fully processed documents
+        // If docType provided, filter by metadata.docType (optional)
+        ...(docType && {
+          metadata: { path: ['docType'], equals: docType },
+        }),
+      },
+      select: { key: true },
+      orderBy: { updatedAt: 'desc' }, // If multiple exist, get most recent
+    })
+
+    if (!asset) {
+      throw new NotFoundException(
+        `KYC document not found${docType ? ` for docType: ${docType}` : ' for this owner'}`,
+      )
     }
-    throw new NotFoundException(`KYC document not found for docType: ${docType}`)
+
+    // Use the actual stored key, not a rebuilt path
+    const url = await this.storage.presignGet(asset.key, expiresIn)
+    return { downloadUrl: url, expiresIn }
+  }
+
+  /**
+   * Get all KYC documents for an owner with signed download URLs.
+   * 
+   * Returns array of all ready KYC docs with docType from metadata.
+   * Uses presignGetBatch for efficient parallel URL generation.
+   */
+  async getAllKycDocUrls(
+    ownerId: string,
+    expiresIn = PRESIGN_PRIVATE_EXPIRY_S,
+  ): Promise<{ data: Array<{ docType: string; downloadUrl: string }> }> {
+    // Fetch all ready KYC documents for this owner
+    const assets = await this.prisma.media_assets.findMany({
+      where: {
+        entityId: ownerId,
+        assetType: 'kyc_document',
+        status: 'ready',
+      },
+      select: { key: true, metadata: true },
+      orderBy: { updatedAt: 'desc' },
+    })
+
+    if (assets.length === 0) {
+      return { data: [] }
+    }
+
+    // Generate all signed URLs in parallel using batch method
+    const keys = assets.map((a: { key: string; metadata: any }) => a.key)
+    const urls = await this.storage.presignGetBatch(keys, expiresIn)
+
+    // Map URLs with docType from metadata
+    const results = assets.map((asset: { key: string; metadata: any }, idx: number) => ({
+      docType: asset.metadata?.docType || 'unknown',
+      downloadUrl: urls[idx] || '',
+    }))
+
+    return { data: results }
   }
 
   /**
@@ -359,7 +439,10 @@ export class MediaService {
       assetType, targetWidth: width, targetHeight: height,
     }
 
-    await this.imageQueue
+    // 🔥 FIRE-AND-FORGET: Don't await queue.add()
+    // This method is called from a fire-and-forget context already,
+    // but defensive: if this ever gets awaited, we still don't block on Redis.
+    void this.imageQueue
       .add('process-media', jobData, {
         attempts:         3,
         backoff:          { type: 'exponential', delay: 5_000 },
