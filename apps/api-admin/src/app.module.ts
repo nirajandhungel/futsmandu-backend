@@ -24,6 +24,7 @@ import { AdminModerationModule }   from './modules/review-and-moderation/admin-m
 import { AdminAnalyticsModule }    from './modules/analytics/analytics.module.js'
 import { AdminHealthModule }       from './modules/health/health.module.js'
 import { AdminPaymentModule } from './modules/payment/payment.module.js'
+import { AdminOwnersModule }       from './modules/owners/admin-owners.module.js'
 import { ENV } from '@futsmandu/utils'
 
 
@@ -60,6 +61,7 @@ import { ENV } from '@futsmandu/utils'
     AdminModerationModule,
     AdminAnalyticsModule,
     AdminPaymentModule,
+    AdminOwnersModule,
     AdminHealthModule,
   ],
   providers: [
