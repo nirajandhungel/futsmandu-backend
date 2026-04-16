@@ -82,7 +82,7 @@ export class AdminPenaltiesService {
 
     const [disputes, total] = await Promise.all([
       this.prisma.no_show_logs.findMany({
-        where: { dispute_status: 'opened' },
+        where: { dispute_status: 'disputed' },
         select: {
           id: true, booking_id: true, dispute_status: true,
           dispute_reason: true, created_at: true,
@@ -93,20 +93,20 @@ export class AdminPenaltiesService {
         skip,
         take: PAGE_SIZE,
       }),
-      this.prisma.no_show_logs.count({ where: { dispute_status: 'opened' } }),
+      this.prisma.no_show_logs.count({ where: { dispute_status: 'disputed' } }),
     ])
 
     return { data: disputes, meta: { page, total } }
   }
 
-  async resolveDispute(adminId: string, disputeId: string, resolution: 'resolved_noshow' | 'resolved_cleared') {
+  async resolveDispute(adminId: string, disputeId: string, resolution: 'resolved' | 'rejected') {
     const log = await this.prisma.no_show_logs.findUnique({
       where: { id: disputeId },
       select: { id: true, player_id: true, dispute_status: true },
     })
     if (!log) throw new NotFoundException('Dispute not found')
-    if (log.dispute_status !== 'opened') {
-      throw new BadRequestException('Dispute is not in opened state')
+    if (log.dispute_status !== 'disputed') {
+      throw new BadRequestException('Dispute is not in disputed state')
     }
 
     await this.prisma.$transaction(async (tx: PrismaTx) => {
@@ -118,8 +118,8 @@ export class AdminPenaltiesService {
         },
       })
 
-      // If cleared: restore 20 reliability points (capped at 100)
-      if (resolution === 'resolved_cleared') {
+      // If rejected (dispute rejected = player is cleared): restore 20 reliability points (capped at 100)
+      if (resolution === 'rejected') {
         const user = await tx.users.findUnique({
           where: { id: log.player_id },
           select: { reliability_score: true, total_no_shows: true },
