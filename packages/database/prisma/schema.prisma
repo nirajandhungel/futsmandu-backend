@@ -1,15 +1,3 @@
-// packages/database/prisma/schema.prisma
-// FULL UPDATED SCHEMA — all payment split additions merged in.
-//
-// CHANGES vs previous version:
-//   [PAY-1] New enum: payout_status
-//   [PAY-2] New enum: payout_trigger
-//   [PAY-3] owners model: +esewa_id, +esewa_verified, +esewa_verified_at, +payouts relation
-//   [PAY-4] payments model: +payout relation
-//   [PAY-5] venues model: +payouts relation
-//   [PAY-6] New model: platform_config (admin fee %, etc.)
-//   [PAY-7] New model: owner_payouts (tracks every split payout, ACID-linked to payments)
-
 generator client {
   provider = "prisma-client-js"
   output   = "../generated/prisma"
@@ -19,11 +7,11 @@ datasource db {
   provider     = "postgresql"
   url          = env("DATABASE_URL")
   directUrl    = env("DIRECT_DATABASE_URL")
-  relationMode = "prisma"
+  relationMode = "foreignKeys"
 }
 
-// ── Enums ─────────────────────────────────────────────────────────────────────
 
+// ==================== ENUMS ====================
 enum booking_status {
   HELD
   PENDING_PAYMENT
@@ -34,11 +22,22 @@ enum booking_status {
   COMPLETED
 }
 
-enum booking_type {
-  online
-  offline_cash
-  offline_paid
-  offline_reserved
+enum booking_source {
+  PLAYER_SELF
+  GROUP_ADMIN
+  OFFLINE_COUNTER
+}
+
+enum payment_method {
+  CASH
+  KHALTI
+  ESEWA
+  BANK_TRANSFER
+}
+
+enum payment_gateway {
+  KHALTI
+  ESEWA
 }
 
 enum payment_status {
@@ -48,24 +47,17 @@ enum payment_status {
   REFUNDED
 }
 
-enum payment_gateway {
-  KHALTI
-  ESEWA
-}
-
-// [PAY-1] Tracks the lifecycle of each owner payout attempt
 enum payout_status {
-  PENDING           // Job queued, not yet attempted
-  PROCESSING        // BullMQ worker picked it up
-  SUCCESS           // eSewa fund transfer confirmed
-  FAILED            // All retries exhausted — needs admin intervention
-  MANUALLY_RESOLVED // Admin marked resolved (e.g., bank transfer)
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  MANUALLY_RESOLVED
 }
 
-// [PAY-2] How the payout was triggered
 enum payout_trigger {
-  AUTO_SPLIT    // Automatic after player payment confirmed
-  MANUAL_RETRY  // Admin triggered from dashboard
+  AUTO_SPLIT
+  MANUAL_RETRY
 }
 
 enum friendship_status {
@@ -117,16 +109,16 @@ enum notification_type {
   BOOKING_CANCELLED
   SLOT_EXPIRING
   MATCH_INVITE
-  MATCH_JOIN_REQUEST
-  MATCH_JOIN_ACCEPTED
-  MATCH_JOIN_REJECTED
-  FRIEND_ADDED_TO_MATCH
   FRIEND_REQUEST
   FRIEND_ACCEPTED
   NO_SHOW_MARKED
   REVIEW_REQUEST
   MATCH_FULL
   GENERAL
+  MATCH_JOIN_REQUEST
+  MATCH_JOIN_ACCEPTED
+  MATCH_JOIN_REJECTED
+  FRIEND_ADDED_TO_MATCH
 }
 
 enum join_mode {
@@ -147,180 +139,288 @@ enum match_join_request_status {
   WITHDRAWN
 }
 
-// ── Users ─────────────────────────────────────────────────────────────────────
+enum dispute_status {
+  none
+  disputed
+  resolved
+  rejected
+}
+
+enum media_status {
+  pending
+  processing
+  completed
+  failed
+}
+
+enum match_fill_status {
+  PARTIAL
+  FULL
+  WAITLIST
+}
+
+enum otp_user_type {
+  USER
+  OWNER
+  ADMIN
+}
+
+enum marked_by_type {
+  USER
+  ADMIN
+  SYSTEM
+}
+
+enum media_asset_type {
+  USER_AVATAR
+  OWNER_AVATAR
+  OWNER_CITIZENSHIP
+  OWNER_BUSINESS_REGISTRATION
+  OWNER_PAN
+  VENUE_COVER
+  VENUE_GALLERY
+  MATCH_MEDIA
+  SYSTEM
+}
+
+enum owner_kyc_type {
+  CITIZENSHIP
+  BUSINESS_REGISTRATION
+  PAN
+}
+
+enum kyc_status {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum venue_media_type {
+  COVER
+  GALLERY
+}
+
+enum actor_type {
+  USER
+  ADMIN
+  OWNER
+  SYSTEM
+}
+
+enum action_type {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  PAYMENT
+  REFUND
+  JOIN_MATCH
+  LEAVE_MATCH
+  INVITE
+  REPORT
+}
+
+// ==================== MODELS ====================
 
 model users {
-  id                    String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                    String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name                  String
-  email                 String      @unique
-  phone                 String      @unique
+  email                 String                    @unique
+  phone                 String                    @unique
   password_hash         String
   profile_image_url     String?
-  is_verified           Boolean     @default(false)
-  is_active             Boolean     @default(true)
+  is_verified           Boolean                   @default(false)
+  is_active             Boolean                   @default(true)
   fcm_token             String?
-  skill_level           skill_level @default(beginner)
-  elo_rating            Int         @default(1200)
-  reliability_score     Int         @default(100) @db.SmallInt
-  total_no_shows        Int         @default(0)
-  total_late_cancels    Int         @default(0)
-  ban_until             DateTime?   @db.Timestamptz
-  is_suspended          Boolean     @default(false)
-  matches_played        Int         @default(0)
-  matches_won           Int         @default(0)
-  matches_lost          Int         @default(0)
-  matches_draw          Int         @default(0)
-  show_match_history    Boolean     @default(true)
-  refresh_token_version Int         @default(0)
-  created_at            DateTime    @default(now()) @db.Timestamptz
-  updated_at            DateTime    @updatedAt @db.Timestamptz
+  skill_level           skill_level               @default(beginner)
+  elo_rating            Int                       @default(1200)
+  reliability_score     Int                       @default(100) @db.SmallInt
+  total_no_shows        Int                       @default(0)
+  total_late_cancels    Int                       @default(0)
+  ban_until             DateTime?                 @db.Timestamptz(6)
+  is_suspended          Boolean                   @default(false)
+  matches_played        Int                       @default(0)
+  matches_won           Int                       @default(0)
+  matches_lost          Int                       @default(0)
+  matches_draw          Int                       @default(0)
+  show_match_history    Boolean                   @default(true)
+  refresh_token_version Int                       @default(0)
+  created_at            DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime                  @updatedAt @db.Timestamptz(6)
+  deleted_at            DateTime?                 @db.Timestamptz(6)
+  deleted_by            String?                   @db.Uuid
 
-  bookings             bookings[]           @relation("PlayerBookings")
-  cancelled_bookings   bookings[]           @relation("CancelledBy")
-  payments             payments[]
-  match_groups_admin   match_groups[]
-  match_group_members  match_group_members[]
-  sent_friendships     friendships[]        @relation("Requester")
-  received_friendships friendships[]        @relation("Recipient")
-  no_show_logs         no_show_logs[]       @relation("PlayerNoShows")
-  marked_no_shows      no_show_logs[]       @relation("MarkedBy")
-  penalties            penalty_history[]
-  reviews              reviews[]
-  notifications        notifications[]
-  preferred_roles      user_preferred_roles[]
-  sent_join_requests   match_join_requests[]   @relation("JoinRequester")
-  responded_requests   match_join_requests[]   @relation("JoinResponder")
-  invited_match_members match_group_members[]  @relation("InvitedBy")
-  email_otps           email_verification_otps[] @relation("PlayerOtps")
+  bookings              bookings[]                @relation("PlayerBookings")
+  cancelled_bookings    bookings[]                @relation("CancelledBy")
+  created_bookings      bookings[]                @relation("CreatedByUser")
+  payments              payments[]
+  match_groups_admin    match_groups[]            @relation("MatchGroupAdmin")
+  match_group_members   match_group_members[]
+  sent_friendships      friendships[]             @relation("Requester")
+  received_friendships  friendships[]             @relation("Recipient")
+  no_show_logs          no_show_logs[]            @relation("PlayerNoShows")
+  marked_no_shows       no_show_logs[]            @relation("MarkedBy")
+  penalties             penalty_history[]
+  reviews               reviews[]
+  notifications         notifications[]
+  preferred_roles       user_preferred_roles[]
+  sent_join_requests    match_join_requests[]     @relation("JoinRequester")
+  responded_requests    match_join_requests[]     @relation("JoinResponder")
+  invited_match_members match_group_members[]     @relation("InvitedBy")
+  email_otps            email_verification_otps[] @relation("PlayerOtps")
+  created_invite_tokens invite_tokens[]           @relation("InviteTokenCreator")
+  media_assets          media_assets[]
+  user_avatar_media     user_avatars[]
+  match_media           match_media[]             @relation("Uploader")
 
   @@index([email])
   @@index([phone])
   @@index([ban_until])
+  @@index([is_active, is_suspended])
+  @@index([reliability_score])
+  @@index([skill_level, elo_rating])
+  @@index([deleted_at])
 }
 
 model user_preferred_roles {
   id      String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   user_id String      @db.Uuid
   role    player_role
-  user    users       @relation(fields: [user_id], references: [id])
+  user    users       @relation(fields: [user_id], references: [id], onDelete: Restrict)
 
   @@unique([user_id, role])
   @@index([user_id])
 }
 
-// ── Admins ────────────────────────────────────────────────────────────────────
-
 model admins {
-  id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email         String     @unique
-  password_hash String
-  name          String
-  role          admin_role @default(ADMIN)
-  is_active     Boolean    @default(true)
-  is_verified   Boolean    @default(false)
-  createdAt     DateTime   @default(now()) @db.Timestamptz
-  updatedAt     DateTime   @updatedAt @db.Timestamptz
+  id                 String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email              String                    @unique
+  password_hash      String
+  name               String
+  role               admin_role                @default(ADMIN)
+  is_active          Boolean                   @default(true)
+  created_at         DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime                  @updatedAt @db.Timestamptz(6)
+  is_verified        Boolean                   @default(false)
+  deleted_at         DateTime?                 @db.Timestamptz(6)
 
-  kycApprovals   owners[]  @relation("AdminKycApprovals")
-  venueApprovals venues[]  @relation("AdminVenueApprovals")
-  email_otps     email_verification_otps[] @relation("AdminOtps")
+  kyc_approvals      owners[]                  @relation("AdminKycApprovals")
+  venue_approvals    venues[]                  @relation("AdminVenueApprovals")
+  email_otps         email_verification_otps[] @relation("AdminOtps")
+  created_bookings   bookings[]                @relation("CreatedByAdmin")
+  kyc_verifications  owner_kyc_documents[]
+
+  @@index([email, is_active])
+  @@index([deleted_at])
 }
-
-// ── Owners ────────────────────────────────────────────────────────────────────
 
 model owners {
-  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name              String
-  email             String    @unique
-  phone             String    @unique
-  password_hash     String
-  business_name     String?
-  is_verified       Boolean   @default(false)
-  is_active         Boolean   @default(true)
-  verification_docs Json?
-
-  isKycApproved    Boolean   @default(false)
-  kycApprovedAt    DateTime?
-  kycApprovedById  String?   @db.Uuid
-  kycApprovedBy    admins?   @relation("AdminKycApprovals", fields: [kycApprovedById], references: [id])
-
-  // [PAY-3] Owner's personal eSewa account for receiving payouts
-  // Admin must verify this is valid before payouts go through.
-  // Stored as the eSewa-registered phone number or email.
-  esewa_id          String?
-  esewa_verified    Boolean   @default(false)
-  esewa_verified_at DateTime? @db.Timestamptz
-
+  id                    String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String
+  email                 String                    @unique
+  phone                 String                    @unique
+  password_hash         String
+  business_name         String?
+  is_verified           Boolean                   @default(false)
+  is_active             Boolean                   @default(true)
+  verification_docs     Json?                     // deprecated, use owner_kyc_documents instead
   fcm_token             String?
-  refresh_token_version Int     @default(0)
-  created_at            DateTime @default(now()) @db.Timestamptz
-  updated_at            DateTime @updatedAt @db.Timestamptz
+  refresh_token_version Int                       @default(0)
+  created_at            DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime                  @updatedAt @db.Timestamptz(6)
+  is_kyc_approved       Boolean                   @default(false)
+  kyc_approved_at       DateTime?
+  kyc_approved_by_id    String?                   @db.Uuid
+  esewa_id              String?
+  esewa_verified        Boolean                   @default(false)
+  esewa_verified_at     DateTime?                 @db.Timestamptz(6)
+  deleted_at            DateTime?                 @db.Timestamptz(6)
+  deleted_by            String?                   @db.Uuid
 
-  venues     venues[]
-  email_otps email_verification_otps[] @relation("OwnerOtps")
-  payouts    owner_payouts[] // [PAY-3]
+  kyc_approved_by       admins?                   @relation("AdminKycApprovals", fields: [kyc_approved_by_id], references: [id])
+  venues                venues[]
+  email_otps            email_verification_otps[] @relation("OwnerOtps")
+  payouts               owner_payouts[]
+  kyc_documents         owner_kyc_documents[]
+  created_bookings      bookings[]                @relation("CreatedByOwner")
+  // user_activity_logs back-relation removed: resolve via actor_type + actor_id in service layer
+  // media_assets back-relation removed: owner uploads resolved via uploader_type + uploader_id in service layer
 
-  @@index([esewa_verified]) // [PAY-3] Admin dashboard filter: unverified eSewa owners
+  @@index([email])
+  @@index([phone])
+  @@index([esewa_verified])
+  @@index([is_kyc_approved, is_active])
+  @@index([created_at])
+  @@index([deleted_at])
 }
 
-// ── Venues & Courts ───────────────────────────────────────────────────────────
-
 model venues {
-  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  owner_id             String   @db.Uuid
-  name                 String
-  slug                 String   @unique
-  description          String?
-  address              Json
-  latitude             Decimal? @db.Decimal(10, 8)
-  longitude            Decimal? @db.Decimal(11, 8)
-  amenities            String[]
-  cover_image_url      String?
-  is_active            Boolean  @default(true)
-  is_verified          Boolean  @default(false)
-  isApproved           Boolean  @default(false)
-  approvedAt           DateTime?
-  approvedById         String?  @db.Uuid
-  approvedBy           admins?  @relation("AdminVenueApprovals", fields: [approvedById], references: [id])
-  avg_rating           Decimal  @default(0) @db.Decimal(3, 2)
-  total_reviews        Int      @default(0)
-  full_refund_hours    Int      @default(24) @db.SmallInt
-  partial_refund_hours Int      @default(6)  @db.SmallInt
-  partial_refund_pct   Int      @default(50) @db.SmallInt
-  created_at           DateTime @default(now()) @db.Timestamptz
-  updated_at           DateTime @updatedAt @db.Timestamptz
+  id                    String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id              String          @db.Uuid
+  name                  String
+  slug                  String          @unique
+  description           String?
+  address               Json
+  latitude              Decimal?        @db.Decimal(10, 8)
+  longitude             Decimal?        @db.Decimal(11, 8)
+  amenities             String[]
+  cover_image_url       String?
+  is_active             Boolean         @default(true)
+  is_verified           Boolean         @default(false)
+  avg_rating            Decimal         @default(0) @db.Decimal(3, 2)
+  total_reviews         Int             @default(0)
+  full_refund_hours     Int             @default(24) @db.SmallInt
+  partial_refund_hours  Int             @default(6) @db.SmallInt
+  partial_refund_pct    Int             @default(50) @db.SmallInt
+  created_at            DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime        @updatedAt @db.Timestamptz(6)
+  approved_at           DateTime?
+  approved_by_id        String?         @db.Uuid
+  deleted_at            DateTime?       @db.Timestamptz(6)
+  deleted_by            String?         @db.Uuid
 
-  owner        owners         @relation(fields: [owner_id], references: [id])
-  courts       courts[]
-  bookings     bookings[]
-  match_groups match_groups[]
-  reviews      reviews[]
-  payouts      owner_payouts[] // [PAY-5]
+  approved_by           admins?         @relation("AdminVenueApprovals", fields: [approved_by_id], references: [id])
+  owner                 owners          @relation(fields: [owner_id], references: [id], onDelete: Restrict)
+  courts                courts[]
+  bookings              bookings[]
+  match_groups          match_groups[]
+  reviews               reviews[]
+  payouts               owner_payouts[]
+  venue_media           venue_media[]
 
-  @@index([is_active, is_verified])
-  @@index([owner_id])
+  @@index([owner_id, is_active])
+  @@index([is_active, is_verified, avg_rating])
+  @@index([slug])
+  @@index([latitude, longitude])
+  @@index([created_at])
+  @@index([deleted_at])
 }
 
 model courts {
-  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  venue_id           String   @db.Uuid
+  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  venue_id           String          @db.Uuid
   name               String
-  court_type         String   @default("5v5")
-  surface            String   @default("turf")
-  capacity           Int      @default(10) @db.SmallInt
-  min_players        Int      @default(4)  @db.SmallInt
-  slot_duration_mins Int      @default(60) @db.SmallInt
-  open_time          String   @default("06:00")
-  close_time         String   @default("22:00")
-  is_active          Boolean  @default(true)
-  created_at         DateTime @default(now()) @db.Timestamptz
+  court_type         String          @default("5v5")
+  surface            String          @default("turf")
+  capacity           Int             @default(10) @db.SmallInt
+  min_players        Int             @default(4) @db.SmallInt
+  slot_duration_mins Int             @default(60) @db.SmallInt
+  open_time          String          @default("06:00")
+  close_time         String          @default("22:00")
+  is_active          Boolean         @default(true)
+  created_at         DateTime        @default(now()) @db.Timestamptz(6)
+  deleted_at         DateTime?       @db.Timestamptz(6)
+  deleted_by         String?         @db.Uuid
 
-  venue         venues          @relation(fields: [venue_id], references: [id], onDelete: Cascade)
-  bookings      bookings[]
-  pricing_rules pricing_rules[]
-  match_groups  match_groups[]
+  venue              venues          @relation(fields: [venue_id], references: [id], onDelete: Restrict)
+  bookings           bookings[]
+  pricing_rules      pricing_rules[]
+  match_groups       match_groups[]
 
   @@index([venue_id, is_active])
+  @@index([court_type, is_active])
+  @@index([deleted_at])
 }
 
 model pricing_rules {
@@ -337,199 +437,205 @@ model pricing_rules {
   date_to      DateTime?        @db.Date
   hours_before Int?
   is_active    Boolean          @default(true)
-  created_at   DateTime         @default(now()) @db.Timestamptz
+  created_at   DateTime         @default(now()) @db.Timestamptz(6)
+  deleted_at   DateTime?        @db.Timestamptz(6)
 
-  court    courts     @relation(fields: [court_id], references: [id])
-  bookings bookings[]
+  court        courts           @relation(fields: [court_id], references: [id], onDelete: Restrict)
+  bookings     bookings[]
 
   @@unique([court_id, priority])
   @@index([court_id, is_active])
+  @@index([is_active, date_from, date_to])
+  @@index([deleted_at])
 }
 
-// ── Bookings ──────────────────────────────────────────────────────────────────
-
 model bookings {
-  id                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  booking_type           booking_type   @default(online)
-  player_id              String?        @db.Uuid
-  court_id               String         @db.Uuid
-  venue_id               String         @db.Uuid
-  booking_date           DateTime       @db.Date
+  id                     String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  payment_method         payment_method?
+  booking_source         booking_source  @default(PLAYER_SELF)
+  // FIX 1: player_id is optional (SetNull requires nullable FK)
+  player_id              String?         @db.Uuid
+  court_id               String          @db.Uuid
+  venue_id               String          @db.Uuid
+  booking_date           DateTime        @db.Date
   start_time             String
   end_time               String
-  duration_mins          Int            @db.SmallInt
+  duration_mins          Int             @db.SmallInt
   total_amount           Int
   base_price             Int
-  applied_rule_id        String?        @db.Uuid
-  status                 booking_status @default(HELD)
-  hold_expires_at        DateTime?      @db.Timestamptz
-  cancelled_at           DateTime?      @db.Timestamptz
-  cancelled_by           String?        @db.Uuid
+  applied_rule_id        String?         @db.Uuid
+  status                 booking_status  @default(HELD)
+  hold_expires_at        DateTime?       @db.Timestamptz(6)
+  cancelled_at           DateTime?       @db.Timestamptz(6)
+  // FIX 1: cancelled_by is optional (SetNull requires nullable FK)
+  cancelled_by           String?         @db.Uuid
   cancel_reason          String?
   refund_status          String?
   refund_amount          Int?
   offline_customer_name  String?
   offline_customer_phone String?
   offline_notes          String?
-  created_by             String         @db.Uuid
-  created_at             DateTime       @default(now()) @db.Timestamptz
-  updated_at             DateTime       @updatedAt @db.Timestamptz
+  // FIX 4: Exactly one of these must be non-null — enforced via DB CHECK constraint in migration SQL
+  // SERVICE LAYER GUARD REQUIRED before insert/update:
+  //   if (Number(!!created_by_user_id) + Number(!!created_by_admin_id) + Number(!!created_by_owner_id) !== 1)
+  //     throw new Error('Exactly one creator must be set')
+  created_by_user_id     String?         @db.Uuid
+  created_by_admin_id    String?         @db.Uuid
+  created_by_owner_id    String?         @db.Uuid
+  created_at             DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime        @updatedAt @db.Timestamptz(6)
   booking_meta           Json?
+  deleted_at             DateTime?       @db.Timestamptz(6)
 
-  player       users?         @relation("PlayerBookings", fields: [player_id], references: [id], onDelete: SetNull)
-  canceller    users?         @relation("CancelledBy", fields: [cancelled_by], references: [id])
-  court        courts         @relation(fields: [court_id], references: [id], onDelete: Restrict)
-  venue        venues         @relation(fields: [venue_id], references: [id], onDelete: Restrict)
-  applied_rule pricing_rules? @relation(fields: [applied_rule_id], references: [id])
-  payment      payments?
-  match_group  match_groups?
-  review       reviews?
+  // FIX 1: SetNull is valid because player_id and cancelled_by are nullable
+  player                 users?          @relation("PlayerBookings", fields: [player_id], references: [id], onDelete: SetNull)
+  canceller              users?          @relation("CancelledBy", fields: [cancelled_by], references: [id], onDelete: SetNull)
+  created_by_user        users?          @relation("CreatedByUser", fields: [created_by_user_id], references: [id], onDelete: Restrict)
+  created_by_admin       admins?         @relation("CreatedByAdmin", fields: [created_by_admin_id], references: [id], onDelete: Restrict)
+  created_by_owner       owners?         @relation("CreatedByOwner", fields: [created_by_owner_id], references: [id], onDelete: Restrict)
+  court                  courts          @relation(fields: [court_id], references: [id], onDelete: Restrict)
+  venue                  venues          @relation(fields: [venue_id], references: [id], onDelete: Restrict)
+  applied_rule           pricing_rules?  @relation(fields: [applied_rule_id], references: [id])
+  payment                payments?
+  match_group            match_groups?
+  review                 reviews?
 
-  @@index([player_id, created_at(sort: Desc)])
-  @@index([court_id, booking_date, status])
+  @@index([court_id, booking_date, start_time, status])
   @@index([venue_id, booking_date, status])
+  @@index([player_id, status, booking_date])
+  @@index([player_id, created_at(sort: Desc)])
   @@index([hold_expires_at, status])
+  @@index([status, booking_date])
+  @@index([created_by_user_id, created_at])
+  @@index([created_by_admin_id, created_at])
+  @@index([created_by_owner_id, created_at])
+  @@index([cancelled_at])
+  @@index([deleted_at])
+  @@index([payment_method])
+  @@index([booking_source])
 }
-
-// ── Payments ──────────────────────────────────────────────────────────────────
 
 model payments {
-  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  booking_id          String          @unique @db.Uuid
-  player_id           String          @db.Uuid
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  booking_id          String                @unique @db.Uuid
+  player_id           String                @db.Uuid
   amount              Int
-  gateway             payment_gateway
+  payment_method      payment_method
+  gateway             payment_gateway?
   gateway_tx_id       String?
   gateway_response    Json?
-  status              payment_status  @default(INITIATED)
-  initiated_at        DateTime        @default(now()) @db.Timestamptz
-  completed_at        DateTime?       @db.Timestamptz
-  refund_initiated_at DateTime?       @db.Timestamptz
-  refund_completed_at DateTime?       @db.Timestamptz
+  status              payment_status        @default(INITIATED)
+  initiated_at        DateTime              @default(now()) @db.Timestamptz(6)
+  completed_at        DateTime?             @db.Timestamptz(6)
+  refund_initiated_at DateTime?             @db.Timestamptz(6)
+  refund_completed_at DateTime?             @db.Timestamptz(6)
+  deleted_at          DateTime?             @db.Timestamptz(6)
 
-  booking         bookings              @relation(fields: [booking_id], references: [id])
-  player          users                 @relation(fields: [player_id], references: [id])
-  member_payments match_group_members[]
-  payout          owner_payouts?        // [PAY-4] one payment → one payout
+  booking             bookings              @relation(fields: [booking_id], references: [id], onDelete: Restrict)
+  player              users                 @relation(fields: [player_id], references: [id], onDelete: Restrict)
+  member_payments     match_group_members[]
+  payout              owner_payouts?
 
   @@index([gateway_tx_id])
-  @@index([status])
-  @@index([player_id])
+  @@index([status, initiated_at])
+  @@index([player_id, status])
+  @@index([booking_id])
+  @@index([completed_at])
+  @@index([deleted_at])
+  @@index([payment_method])
 }
-
-// ── [PAY-6] Platform Config ───────────────────────────────────────────────────
-// Admin-configurable key-value store. Never hardcode business logic.
-// Seed with:
-//   INSERT INTO platform_config (key, value, description)
-//   VALUES ('admin_fee_percent', '5', 'Platform fee % taken from each booking payment');
 
 model platform_config {
   key         String   @id
   value       String
   description String?
   updated_by  String?  @db.Uuid
-  updated_at  DateTime @updatedAt @db.Timestamptz
+  updated_at  DateTime @updatedAt @db.Timestamptz(6)
 
   @@map("platform_config")
 }
 
-// ── [PAY-7] Owner Payouts ─────────────────────────────────────────────────────
-// One record per booking payment. Created atomically with payment SUCCESS.
-// BullMQ processes the actual eSewa fund transfer asynchronously.
-//
-// Money audit trail:
-//   total_collected = admin_fee + owner_amount  (always true, enforced in service)
-//   admin_fee_pct   = snapshot of admin fee % at time of this payment
-//                     (so changing fee later doesn't retroactively affect records)
-
 model owner_payouts {
-  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-
-  payment_id       String         @unique @db.Uuid
-  booking_id       String         @db.Uuid
-  owner_id         String         @db.Uuid
-  venue_id         String         @db.Uuid
-
-  // Money — all paisa (integer, never float)
-  total_collected  Int
-  admin_fee        Int
-  owner_amount     Int
-  admin_fee_pct    Int            @db.SmallInt
-
-  // Destination — snapshot at payout time
-  owner_esewa_id   String
-
-  // Status
-  status           payout_status  @default(PENDING)
-  trigger          payout_trigger @default(AUTO_SPLIT)
-
-  // eSewa transfer details
-  esewa_transfer_id  String?
-  esewa_response     Json?
-
-  // Retry tracking
-  attempt_count      Int      @default(0)
-  last_attempted_at  DateTime? @db.Timestamptz
+  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  payment_id          String         @unique @db.Uuid
+  booking_id          String         @db.Uuid
+  owner_id            String         @db.Uuid
+  venue_id            String         @db.Uuid
+  total_collected     Int
+  admin_fee           Int
+  owner_amount        Int
+  admin_fee_pct       Int            @db.SmallInt
+  owner_esewa_id      String
+  status              payout_status  @default(PENDING)
+  trigger             payout_trigger @default(AUTO_SPLIT)
+  esewa_transfer_id   String?
+  esewa_response      Json?
+  attempt_count       Int            @default(0)
+  last_attempted_at   DateTime?      @db.Timestamptz(6)
   last_failure_reason String?
+  resolved_by         String?        @db.Uuid
+  resolved_at         DateTime?      @db.Timestamptz(6)
+  resolution_note     String?
+  created_at          DateTime       @default(now()) @db.Timestamptz(6)
+  completed_at        DateTime?      @db.Timestamptz(6)
+  deleted_at          DateTime?      @db.Timestamptz(6)
 
-  // Manual resolution
-  resolved_by      String?   @db.Uuid
-  resolved_at      DateTime? @db.Timestamptz
-  resolution_note  String?
+  payment             payments       @relation(fields: [payment_id], references: [id], onDelete: Restrict)
+  owner               owners         @relation(fields: [owner_id], references: [id], onDelete: Restrict)
+  venue               venues         @relation(fields: [venue_id], references: [id], onDelete: Restrict)
 
-  // Timestamps
-  created_at       DateTime  @default(now()) @db.Timestamptz
-  completed_at     DateTime? @db.Timestamptz
-
-  // Relations
-  payment  payments @relation(fields: [payment_id], references: [id])
-  owner    owners   @relation(fields: [owner_id], references: [id])
-  venue    venues   @relation(fields: [venue_id], references: [id])
-
-  @@index([status, created_at(sort: Desc)])  // Admin dashboard: pending/failed
-  @@index([owner_id, status])                // Owner payout history
-  @@index([booking_id])
+  @@index([owner_id, status, created_at(sort: Desc)])
+  @@index([status, created_at])
   @@index([venue_id, status])
+  @@index([booking_id])
+  @@index([completed_at])
+  @@index([deleted_at])
 
   @@map("owner_payouts")
 }
 
-// ── Match Groups ──────────────────────────────────────────────────────────────
-
 model match_groups {
-  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  booking_id        String          @unique @db.Uuid
-  venue_id          String          @db.Uuid
-  court_id          String          @db.Uuid
-  match_date        DateTime        @db.Date
+  id                String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  booking_id        String                @unique @db.Uuid
+  venue_id          String                @db.Uuid
+  court_id          String                @db.Uuid
+  match_date        DateTime              @db.Date
   start_time        String
   end_time          String
-  admin_id          String          @db.Uuid
-  is_open           Boolean         @default(false)
-  join_mode         join_mode       @default(INVITE_ONLY)
-  cost_split_mode   cost_split_mode @default(ADMIN_PAYS_ALL)
-  auto_accept       Boolean         @default(false)
-  max_players       Int             @db.SmallInt
-  min_players       Int             @db.SmallInt
-  slots_available   Int             @default(0)
-  description       String?
+  admin_id          String                @db.Uuid
+  is_open           Boolean               @default(false)
+  auto_accept       Boolean               @default(false)
+  max_players       Int                   @db.SmallInt
+  min_players       Int                   @db.SmallInt
   skill_filter      skill_level?
-  invite_token      String?         @unique
-  token_expires_at  DateTime?       @db.Timestamptz
+  invite_token      String?               @unique
+  token_expires_at  DateTime?             @db.Timestamptz(6)
   result_winner     String?
-  attendance_marked Boolean         @default(false)
-  created_at        DateTime        @default(now()) @db.Timestamptz
+  attendance_marked Boolean               @default(false)
+  created_at        DateTime              @default(now()) @db.Timestamptz(6)
+  cost_split_mode   cost_split_mode       @default(ADMIN_PAYS_ALL)
+  description       String?
+  join_mode         join_mode             @default(INVITE_ONLY)
+  fill_status       match_fill_status     @default(PARTIAL)
+  deleted_at        DateTime?             @db.Timestamptz(6)
+  deleted_by        String?               @db.Uuid
 
-  booking bookings              @relation(fields: [booking_id], references: [id])
-  venue   venues                @relation(fields: [venue_id], references: [id])
-  court   courts                @relation(fields: [court_id], references: [id])
-  admin   users                 @relation(fields: [admin_id], references: [id])
-  members match_group_members[]
-  join_requests match_join_requests[]
+  booking           bookings              @relation(fields: [booking_id], references: [id], onDelete: Restrict)
+  venue             venues                @relation(fields: [venue_id], references: [id], onDelete: Restrict)
+  court             courts                @relation(fields: [court_id], references: [id], onDelete: Restrict)
+  admin             users                 @relation("MatchGroupAdmin", fields: [admin_id], references: [id], onDelete: Restrict)
+  members           match_group_members[]
+  join_requests     match_join_requests[]
+  invite_tokens     invite_tokens[]
+  match_media       match_media[]
 
   @@index([is_open, match_date, start_time])
   @@index([invite_token])
-  @@index([admin_id])
+  @@index([admin_id, created_at])
+  @@index([venue_id, match_date])
+  @@index([match_date, start_time])
+  @@index([deleted_at])
+  @@index([fill_status])
 }
 
 model match_group_members {
@@ -540,18 +646,24 @@ model match_group_members {
   team_side      String?          @db.Char(1)
   position       player_role?
   status         mg_member_status @default(confirmed)
+  joined_at      DateTime         @default(now()) @db.Timestamptz(6)
+  invited_by     String?          @db.Uuid
   paid_amount    Int              @default(0)
   payment_id     String?          @db.Uuid
-  invited_by     String?          @db.Uuid
-  joined_at      DateTime         @default(now()) @db.Timestamptz
+  deleted_at     DateTime?        @db.Timestamptz(6)
 
-  match_group match_groups @relation(fields: [match_group_id], references: [id], onDelete: Cascade)
-  user        users        @relation(fields: [user_id], references: [id])
-  payment     payments?    @relation(fields: [payment_id], references: [id])
-  inviter     users?       @relation("InvitedBy", fields: [invited_by], references: [id])
+  match_group    match_groups     @relation(fields: [match_group_id], references: [id], onDelete: Restrict)
+  user           users            @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  // FIX 1: payment_id is optional so SetNull is valid here
+  payment        payments?        @relation(fields: [payment_id], references: [id], onDelete: SetNull)
+  inviter        users?           @relation("InvitedBy", fields: [invited_by], references: [id], onDelete: SetNull)
 
-  @@unique([match_group_id, user_id])
-  @@index([user_id])
+  // FIX 6: @@unique removed — replaced by partial unique index in migration SQL:
+  // CREATE UNIQUE INDEX unique_active_member ON match_group_members(match_group_id, user_id) WHERE deleted_at IS NULL;
+  @@index([match_group_id, user_id])
+  @@index([user_id, status])
+  @@index([match_group_id, status])
+  @@index([deleted_at])
 }
 
 model match_join_requests {
@@ -560,54 +672,66 @@ model match_join_requests {
   user_id        String                    @db.Uuid
   message        String?
   status         match_join_request_status @default(PENDING)
-  created_at     DateTime                  @default(now()) @db.Timestamptz
-  responded_at   DateTime?                 @db.Timestamptz
+  created_at     DateTime                  @default(now()) @db.Timestamptz(6)
+  responded_at   DateTime?                 @db.Timestamptz(6)
   responded_by   String?                   @db.Uuid
+  deleted_at     DateTime?                 @db.Timestamptz(6)
 
-  match_group match_groups @relation(fields: [match_group_id], references: [id], onDelete: Cascade)
-  user        users        @relation("JoinRequester", fields: [user_id], references: [id])
-  responder   users?       @relation("JoinResponder", fields: [responded_by], references: [id])
+  match_group    match_groups              @relation(fields: [match_group_id], references: [id], onDelete: Restrict)
+  user           users                     @relation("JoinRequester", fields: [user_id], references: [id], onDelete: Restrict)
+  responder      users?                    @relation("JoinResponder", fields: [responded_by], references: [id], onDelete: SetNull)
 
-  @@unique([match_group_id, user_id])
+  // FIX 6b: @@unique removed — replaced by partial unique index in migration SQL:
+  // CREATE UNIQUE INDEX unique_active_join_request ON match_join_requests(match_group_id, user_id) WHERE deleted_at IS NULL;
+  @@index([match_group_id, user_id])
   @@index([match_group_id, status])
   @@index([user_id, status])
+  @@index([created_at])
+  @@index([deleted_at])
 }
-
-// ── Social ────────────────────────────────────────────────────────────────────
 
 model friendships {
   id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  // FIX 7: requester_id must always be the lexicographically smaller UUID.
+  // Enforced via DB CHECK constraint in migration SQL:
+  // ALTER TABLE friendships ADD CONSTRAINT chk_friendship_order CHECK (requester_id < recipient_id);
+  // Application layer must normalize before insert (store the smaller UUID as requester_id).
   requester_id String            @db.Uuid
   recipient_id String            @db.Uuid
   status       friendship_status @default(pending)
-  created_at   DateTime          @default(now()) @db.Timestamptz
-  updated_at   DateTime          @updatedAt @db.Timestamptz
+  created_at   DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime          @updatedAt @db.Timestamptz(6)
+  deleted_at   DateTime?         @db.Timestamptz(6)
 
-  requester users @relation("Requester", fields: [requester_id], references: [id])
-  recipient users @relation("Recipient", fields: [recipient_id], references: [id])
+  requester    users             @relation("Requester", fields: [requester_id], references: [id], onDelete: Restrict)
+  recipient    users             @relation("Recipient", fields: [recipient_id], references: [id], onDelete: Restrict)
 
   @@unique([requester_id, recipient_id])
   @@index([recipient_id, status])
+  @@index([requester_id, status])
+  @@index([status, updated_at])
+  @@index([deleted_at])
 }
 
-// ── Reliability ───────────────────────────────────────────────────────────────
-
 model no_show_logs {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  player_id      String    @db.Uuid
-  booking_id     String    @db.Uuid
-  marked_by      String    @db.Uuid
-  marked_by_type String
-  dispute_status String    @default("none")
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  player_id      String         @db.Uuid
+  booking_id     String         @db.Uuid
+  marked_by      String         @db.Uuid
+  marked_by_type marked_by_type
+  dispute_status dispute_status @default(none)
   dispute_reason String?
-  resolved_at    DateTime? @db.Timestamptz
-  created_at     DateTime  @default(now()) @db.Timestamptz
+  resolved_at    DateTime?      @db.Timestamptz(6)
+  created_at     DateTime       @default(now()) @db.Timestamptz(6)
+  deleted_at     DateTime?      @db.Timestamptz(6)
 
-  player users @relation("PlayerNoShows", fields: [player_id], references: [id])
-  marker users @relation("MarkedBy", fields: [marked_by], references: [id])
+  player         users          @relation("PlayerNoShows", fields: [player_id], references: [id], onDelete: Restrict)
+  marker         users          @relation("MarkedBy", fields: [marked_by], references: [id], onDelete: Restrict)
 
   @@index([player_id, created_at])
   @@index([booking_id])
+  @@index([dispute_status])
+  @@index([deleted_at])
 }
 
 model penalty_history {
@@ -616,34 +740,39 @@ model penalty_history {
   penalty_type penalty_type
   reason       String
   triggered_by String
-  ends_at      DateTime?    @db.Timestamptz
+  ends_at      DateTime?    @db.Timestamptz(6)
   status       String       @default("active")
   admin_note   String?
-  created_at   DateTime     @default(now()) @db.Timestamptz
+  created_at   DateTime     @default(now()) @db.Timestamptz(6)
+  deleted_at   DateTime?    @db.Timestamptz(6)
 
-  player users @relation(fields: [player_id], references: [id])
+  player       users        @relation(fields: [player_id], references: [id], onDelete: Restrict)
 
   @@index([player_id, status])
+  @@index([ends_at, status])
+  @@index([deleted_at])
 }
 
-// ── Reviews & Notifications ───────────────────────────────────────────────────
-
 model reviews {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  booking_id  String   @unique @db.Uuid
-  venue_id    String   @db.Uuid
-  player_id   String   @db.Uuid
-  rating      Int      @db.SmallInt
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  booking_id  String    @unique @db.Uuid
+  venue_id    String    @db.Uuid
+  player_id   String    @db.Uuid
+  rating      Int       @db.SmallInt
   comment     String?
-  is_approved Boolean  @default(false)
+  is_approved Boolean   @default(false)
   owner_reply String?
-  created_at  DateTime @default(now()) @db.Timestamptz
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  deleted_at  DateTime? @db.Timestamptz(6)
 
-  booking bookings @relation(fields: [booking_id], references: [id])
-  venue   venues   @relation(fields: [venue_id], references: [id])
-  player  users    @relation(fields: [player_id], references: [id])
+  booking     bookings  @relation(fields: [booking_id], references: [id], onDelete: Restrict)
+  venue       venues    @relation(fields: [venue_id], references: [id], onDelete: Restrict)
+  player      users     @relation(fields: [player_id], references: [id], onDelete: Restrict)
 
-  @@index([venue_id, is_approved])
+  @@index([venue_id, is_approved, rating])
+  @@index([player_id, created_at])
+  @@index([is_approved, created_at])
+  @@index([deleted_at])
 }
 
 model notifications {
@@ -654,45 +783,144 @@ model notifications {
   body       String
   data       Json?
   is_read    Boolean           @default(false)
-  created_at DateTime          @default(now()) @db.Timestamptz
+  created_at DateTime          @default(now()) @db.Timestamptz(6)
+  deleted_at DateTime?         @db.Timestamptz(6)
 
-  user users @relation(fields: [user_id], references: [id])
+  user       users             @relation(fields: [user_id], references: [id], onDelete: Restrict)
 
   @@index([user_id, is_read, created_at(sort: Desc)])
+  @@index([created_at])
+  @@index([deleted_at])
 }
 
+// ==================== MEDIA & ASSET SYSTEM ====================
+
+// LAYER 1: Raw storage — single table for all uploaded files.
+// FIX 2: Polymorphic uploader relations removed. Use uploader_type + uploader_id
+// for manual service-layer joins only (same pattern as user_activity_log).
+// This avoids the Prisma limitation with true polymorphic FKs sharing one FK column.
 model media_assets {
-  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  key        String   @unique
-  assetType  String   @map("asset_type")
-  status     String   @default("pending")
-  uploaderId String   @map("uploader_id") @db.Uuid
-  entityId   String   @map("entity_id")
-  webpKey    String?  @map("webp_key")
-  thumbKey   String?  @map("thumb_key")   // 400×300 WebP thumbnail key, set by processor
-  progress   Int      @default(0) @db.SmallInt  // 0-100, updated by BullMQ processor stages
-  metadata   Json?
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  uploader_id   String           @db.Uuid      // raw ID — join manually based on uploader_type
+  uploader_type actor_type                     // USER, ADMIN, OWNER, SYSTEM
+  asset_type    media_asset_type
+  file_key      String           @unique        // S3/cloud storage key
+  webp_key      String?
+  thumb_key     String?
+  status        media_status     @default(pending)
+  metadata      Json?
+  created_at    DateTime         @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime         @updatedAt @db.Timestamptz(6)
+  deleted_at    DateTime?        @db.Timestamptz(6)
 
-  @@index([entityId, assetType])
+  // Back-relation for USER uploaders only. Admin/owner uploads resolved via uploader_type in service layer.
+  uploader_user users?           @relation(fields: [uploader_id], references: [id], onDelete: Restrict, map: "media_uploader_user_fk")
+  // NOTE: uploader_owner Prisma relation removed — two FKs cannot share the same uploader_id column.
+  // Access owner uploads via raw uploader_id + uploader_type in service layer.
+
+  // Domain links
+  owner_kyc_documents owner_kyc_documents[]
+  venue_media         venue_media[]
+  user_avatars        user_avatars[]
+  match_media         match_media[]
+
+  @@index([uploader_id, uploader_type])
+  @@index([asset_type])
   @@index([status])
-  @@index([uploaderId, status])  // hot path: status polling
-  @@map("media_assets")
+  @@index([deleted_at])
 }
 
+// LAYER 2: Domain-specific linking tables
 
-model invite_tokens {
-  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  token          String   @unique
-  match_group_id String   @db.Uuid
-  created_by     String   @db.Uuid
-  max_uses       Int      @default(10)
-  used_count     Int      @default(0)
-  expires_at     DateTime @db.Timestamptz
-  created_at     DateTime @default(now()) @db.Timestamptz
+// FIX 3: @@unique([user_id, is_active]) replaced by partial unique index in migration SQL:
+// CREATE UNIQUE INDEX one_active_avatar ON user_avatars(user_id) WHERE is_active = true;
+model user_avatars {
+  id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String       @db.Uuid
+  media_id   String       @db.Uuid
+  is_active  Boolean      @default(true)
+  created_at DateTime     @default(now()) @db.Timestamptz(6)
 
-  @@index([token])
+  user       users        @relation(fields: [user_id], references: [id], onDelete: Restrict)
+  media      media_assets @relation(fields: [media_id], references: [id], onDelete: Restrict)
+
+  @@index([user_id])
+  @@index([user_id, is_active])
+}
+
+model owner_kyc_documents {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id         String        @db.Uuid
+  type             owner_kyc_type
+  media_id         String        @db.Uuid
+  status           kyc_status    @default(PENDING)
+  verified_by      String?       @db.Uuid
+  verified_at      DateTime?     @db.Timestamptz(6)
+  rejection_reason String?
+  created_at       DateTime      @default(now()) @db.Timestamptz(6)
+
+  owner            owners        @relation(fields: [owner_id], references: [id], onDelete: Restrict)
+  media            media_assets  @relation(fields: [media_id], references: [id], onDelete: Restrict)
+  verifier         admins?       @relation(fields: [verified_by], references: [id], onDelete: SetNull)
+
+  @@index([owner_id])
+  @@index([type, status])
+}
+
+model venue_media {
+  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  venue_id      String           @db.Uuid
+  media_id      String           @db.Uuid
+  type          venue_media_type @default(GALLERY)
+  display_order Int              @default(0)
+  created_at    DateTime         @default(now()) @db.Timestamptz(6)
+
+  venue         venues           @relation(fields: [venue_id], references: [id], onDelete: Restrict)
+  media         media_assets     @relation(fields: [media_id], references: [id], onDelete: Restrict)
+
+  @@index([venue_id, type])
+}
+
+model match_media {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  match_group_id String       @db.Uuid
+  uploader_id    String       @db.Uuid
+  media_id       String       @db.Uuid
+  caption        String?
+  created_at     DateTime     @default(now()) @db.Timestamptz(6)
+
+  match_group    match_groups @relation(fields: [match_group_id], references: [id], onDelete: Restrict)
+  uploader       users        @relation("Uploader", fields: [uploader_id], references: [id], onDelete: Restrict)
+  media          media_assets @relation(fields: [media_id], references: [id], onDelete: Restrict)
+
+  @@index([match_group_id])
+  @@index([uploader_id])
+}
+
+// ==================== AUDIT & ACTIVITY LOGS ====================
+
+// FIX 1 (actor_id): actor_id used to have SetNull on required fields.
+// Resolved by removing Prisma-level FK relations for the polymorphic actor pattern.
+// Use actor_type + actor_id for manual joins in the service layer.
+// This mirrors the correct approach already used for media_assets uploader.
+model user_activity_log {
+  id          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actor_type  actor_type
+  actor_id    String      @db.Uuid  // raw ID — join manually based on actor_type
+  action      action_type
+  target_type String?
+  target_id   String?     @db.Uuid
+  metadata    Json?
+  created_at  DateTime    @default(now()) @db.Timestamptz(6)
+
+  // actor_type + actor_id resolved manually in service layer.
+  // No Prisma FK relations declared here — three FKs cannot share the same actor_id column.
+  // Back-relations on users/admins/owners are also removed for consistency.
+
+  @@index([actor_type, actor_id, created_at(sort: Desc)])
+  @@index([target_type, target_id])
+  @@index([action, created_at])
+  @@index([created_at])
 }
 
 model admin_audit_log {
@@ -702,36 +930,64 @@ model admin_audit_log {
   target_id   String?  @db.Uuid
   target_type String?
   metadata    Json?
-  created_at  DateTime @default(now()) @db.Timestamptz
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
 
   @@index([admin_id, created_at(sort: Desc)])
   @@index([target_id, target_type])
+  @@index([created_at])
 }
 
+// FIX 8: used_count race condition is prevented by:
+// 1. Always increment via atomic UPDATE ... WHERE used_count < max_uses (return 0 rows = reject)
+// 2. DB-level check constraint added in migration SQL:
+//    ALTER TABLE invite_tokens ADD CONSTRAINT chk_used_count_limit CHECK (used_count <= max_uses);
+model invite_tokens {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token          String       @unique
+  match_group_id String       @db.Uuid
+  created_by     String       @db.Uuid
+  max_uses       Int          @default(10)
+  used_count     Int          @default(0)
+  expires_at     DateTime     @db.Timestamptz(6)
+  created_at     DateTime     @default(now()) @db.Timestamptz(6)
+  deleted_at     DateTime?    @db.Timestamptz(6)
+
+  match_group    match_groups @relation(fields: [match_group_id], references: [id], onDelete: Restrict)
+  creator        users        @relation("InviteTokenCreator", fields: [created_by], references: [id], onDelete: Restrict)
+
+  @@index([token, expires_at])
+  @@index([match_group_id])
+  @@index([deleted_at])
+}
+
+// FIX 4b: XOR constraint (exactly one of player_id, owner_id, admin_id must be non-null)
+// enforced via DB CHECK constraint in migration SQL — see top of file.
+// SERVICE LAYER GUARD REQUIRED before insert:
+//   if (Number(!!player_id) + Number(!!owner_id) + Number(!!admin_id) !== 1)
+//     throw new Error('OTP must belong to exactly one actor')
 model email_verification_otps {
-  id           String    @id @default(cuid())
-  user_type    String    @db.VarChar(20)
-  player_id    String?   @db.Uuid
-  owner_id     String?   @db.Uuid
-  admin_id     String?   @db.Uuid
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_type    otp_user_type
+  player_id    String?       @db.Uuid
+  owner_id     String?       @db.Uuid
+  admin_id     String?       @db.Uuid
   email        String
-  otp          String    @db.VarChar(10)
+  otp          String        @db.VarChar(10)
   ip_address   String?
   user_agent   String?
-  attempts     Int       @default(0)
-  max_attempts Int       @default(5)
-  created_at   DateTime  @default(now()) @db.Timestamptz
-  expires_at   DateTime  @db.Timestamptz
-  verified_at  DateTime? @db.Timestamptz
+  attempts     Int           @default(0)
+  max_attempts Int           @default(5)
+  created_at   DateTime      @default(now()) @db.Timestamptz(6)
+  expires_at   DateTime      @db.Timestamptz(6)
+  verified_at  DateTime?     @db.Timestamptz(6)
 
-  player users?  @relation("PlayerOtps",  fields: [player_id], references: [id], onDelete: Cascade)
-  owner  owners? @relation("OwnerOtps",   fields: [owner_id],  references: [id], onDelete: Cascade)
-  admin  admins? @relation("AdminOtps",   fields: [admin_id],  references: [id], onDelete: Cascade)
+  player       users?        @relation("PlayerOtps", fields: [player_id], references: [id], onDelete: Restrict)
+  owner        owners?       @relation("OwnerOtps", fields: [owner_id], references: [id], onDelete: Restrict)
+  admin        admins?       @relation("AdminOtps", fields: [admin_id], references: [id], onDelete: Restrict)
 
-  @@index([email])
-  @@index([player_id])
-  @@index([owner_id])
-  @@index([admin_id])
-  @@index([expires_at])
-  @@index([verified_at])
+  @@index([email, verified_at])
+  @@index([player_id, verified_at])
+  @@index([owner_id, verified_at])
+  @@index([admin_id, verified_at])
+  @@index([expires_at, verified_at])
 }
