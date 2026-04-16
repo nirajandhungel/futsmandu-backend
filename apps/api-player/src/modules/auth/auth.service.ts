@@ -38,7 +38,7 @@ export class AuthService {
       throw new ConflictException(`An account with this ${field} already exists`)
     }
 
-    const password_hash = await bcrypt.hash(dto.password, 12)
+    const password_hash = await bcrypt.hash(dto.password, 10)
 
     const user = await this.prisma.users.create({
       data: {
@@ -75,9 +75,7 @@ export class AuthService {
     if (!user || !validPassword) throw new UnauthorizedException('Invalid email or password')
     if (!user.is_active) throw new ForbiddenException('Account deactivated')
     if (!user.is_verified) throw new ForbiddenException('Please verify your email first before logging in')
-    if (!user || !validPassword) throw new UnauthorizedException('Invalid email or password')
-    if (!user.is_active) throw new ForbiddenException('Account deactivated')
-
+  
     const { password_hash: _pw, refresh_token_version: _rtv, ...safeUser } = user
     return {
       accessToken:  this.signAccess(user.id, user.email),
