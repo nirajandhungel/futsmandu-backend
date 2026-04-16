@@ -1,10 +1,28 @@
 // apps/player-api/src/modules/venue/venue.controller.ts
-import { Controller, Get, Post, Body, Param, Query, ParseUUIDPipe, HttpCode, HttpStatus } from '@nestjs/common'
+// OPTIMISED:
+//   - Public GET endpoints now emit Cache-Control headers so CDN/proxy layers
+//     can cache venue listings and detail pages (these rarely change per-request)
+//   - page/limit query params typed with @Type(() => Number) so ValidationPipe
+//     transforms them correctly instead of passing strings to the service
+//   - Venue detail cached for 60s; listing for 30s (stale-while-revalidate=120)
+
+import {
+  Controller, Get, Post, Body, Param, Query,
+  ParseUUIDPipe, HttpCode, HttpStatus, Res,
+} from '@nestjs/common'
 import { IsString, IsOptional, IsNumber, IsInt, Min, Max } from 'class-validator'
+import { Type } from 'class-transformer'
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
+import type { FastifyReply } from 'fastify'
 import { VenueService } from './venue.service.js'
 import { CurrentUser, Public } from '@futsmandu/auth'
 import type { AuthenticatedUser } from '@futsmandu/types'
+
+class VenueListQueryDto {
+  @IsString()  @IsOptional() q?: string
+  @IsInt()     @IsOptional() @Min(1)  @Type(() => Number) page?:  number
+  @IsInt()     @IsOptional() @Min(1) @Max(50) @Type(() => Number) limit?: number
+}
 
 class WriteReviewDto {
   @IsString() bookingId!: string
@@ -21,18 +39,24 @@ export class VenueController {
   @Public()
   @Get()
   @ApiOperation({ summary: 'Browse venues with optional text search' })
-  list(
-    @Query('q') q?: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+  async list(
+    @Query() q: VenueListQueryDto,
+    @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    return this.venueService.list(q, page, limit)
+    // Venue lists are semi-static — safe to cache 30s at edge
+    reply.header('Cache-Control', 'public, max-age=30, stale-while-revalidate=120')
+    return this.venueService.list(q.q, q.page, q.limit)
   }
 
   @Public()
   @Get(':id')
   @ApiOperation({ summary: 'Venue detail with courts and recent reviews' })
-  detail(@Param('id', ParseUUIDPipe) id: string) {
+  async detail(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
+    // Detail is more expensive to compute; cache for 60s
+    reply.header('Cache-Control', 'public, max-age=60, stale-while-revalidate=120')
     return this.venueService.detail(id)
   }
 
@@ -47,4 +71,3 @@ export class VenueController {
     return this.venueService.writeReview(venueId, user.id, dto.bookingId, dto.rating, dto.comment)
   }
 }
-
