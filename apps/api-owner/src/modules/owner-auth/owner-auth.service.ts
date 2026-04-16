@@ -9,6 +9,8 @@ import { JwtService } from '@nestjs/jwt'
 import { InjectQueue } from '@nestjs/bullmq'
 import { Queue } from 'bullmq'
 import bcrypt from 'bcryptjs'
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { PrismaService } from '@futsmandu/database'
 import type { Prisma } from '@futsmandu/database'
 import type { JwtPayload } from '@futsmandu/types'
@@ -16,11 +18,23 @@ import type { RegisterOwnerDto, LoginOwnerDto } from './dto/owner-auth.dto.js'
 import { OtpService } from '@futsmandu/auth'
 import { ENV } from '@futsmandu/utils'
 
-const DUMMY_HASH = '$2b$12$kQzFv6Y8WzWjR4o4Fh9J1Oe7gVqM0k7vR9HcU0n6eXvJbAqZ9e9dK'
+// Cost-10 hash of 'dummy_password' — keeps timing consistent for non-existent accounts
+const DUMMY_HASH = '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'
 
 @Injectable()
 export class OwnerAuthService {
   private readonly logger = new Logger(OwnerAuthService.name)
+
+  // S3Client singleton — created once at module startup, not per request
+  private readonly s3 = new S3Client({
+    region:         ENV['S3_REGION'] || 'us-east-1',
+    endpoint:       ENV['S3_ENDPOINT'],
+    forcePathStyle: ENV['S3_FORCE_PATH_STYLE'] === 'true',
+    credentials: {
+      accessKeyId:     ENV['S3_ACCESS_KEY'],
+      secretAccessKey: ENV['S3_SECRET_KEY'],
+    },
+  })
 
   constructor(
     private readonly prisma: PrismaService,
@@ -30,18 +44,19 @@ export class OwnerAuthService {
   ) {}
 
   // ── Register ──────────────────────────────────────────────────────────────
-  // Updated to NOT auto-verify; OTP required before login
   async register(dto: RegisterOwnerDto) {
-    const [emailExists, phoneExists] = await Promise.all([
-  this.prisma.owners.findUnique({ where: { email: dto.email }, select: { id: true } }),
-  this.prisma.owners.findUnique({ where: { phone: dto.phone }, select: { id: true } }),
-])
+    // Select email+phone so we can tell the user exactly which field conflicts
+    const existing = await this.prisma.owners.findFirst({
+      where: { OR: [{ email: dto.email }, { phone: dto.phone }] },
+      select: { email: true, phone: true },
+    })
 
-if (emailExists || phoneExists) {
-  throw new ConflictException('Owner already exists')
-}
+    if (existing) {
+      const field = existing.email === dto.email ? 'email' : 'phone'
+      throw new ConflictException(`An account with this ${field} already exists`)
+    }
 
-    const password_hash = await bcrypt.hash(dto.password, 12)
+    const password_hash = await bcrypt.hash(dto.password, 10)
     const owner = await this.prisma.owners.create({
       data: {
         name:          dto.name,
@@ -128,19 +143,7 @@ if (emailExists || phoneExists) {
     ownerId: string,
     docType: string,
   ): Promise<{ uploadUrl: string; key: string }> {
-    const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3')
-    const { getSignedUrl }              = await import('@aws-sdk/s3-request-presigner')
-
-    const s3 = new S3Client({
-      region:   ENV['S3_REGION'] || 'us-east-1',
-      endpoint: ENV['S3_ENDPOINT'],
-      forcePathStyle: ENV['S3_FORCE_PATH_STYLE'] === 'true',
-      credentials: {
-        accessKeyId:     ENV['S3_ACCESS_KEY'],
-        secretAccessKey: ENV['S3_SECRET_KEY'],
-      },
-    })
-
+    // s3 is a class-level singleton — no dynamic import or new S3Client per call
     const key = `verify/${ownerId}/${docType}.pdf`
     const cmd = new PutObjectCommand({
       Bucket:       ENV['S3_BUCKET'],
@@ -149,29 +152,28 @@ if (emailExists || phoneExists) {
       CacheControl: 'no-store, private',
     })
 
-    const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn: 600 })
-
-    // Record doc key in owner's verification_docs JSON field
-    const current = await this.prisma.owners.findUnique({
-      where: { id: ownerId },
-      select: { verification_docs: true },
-    })
-    const existingDocs: Prisma.InputJsonObject =
-      current?.verification_docs && typeof current.verification_docs === 'object'
-        ? (current.verification_docs as Prisma.InputJsonObject)
-        : {}
-    const updatedDocs: Prisma.InputJsonObject = {
-      ...(existingDocs as Record<string, Prisma.InputJsonValue>),
-      [docType]: key,
-    }
-
-    await this.prisma.owners.update({
-      where: { id: ownerId },
-      data: {
-        verification_docs: updatedDocs,
-        updated_at: new Date(),
-      },
-    })
+    // Run the presign + DB update in parallel to cut one extra round-trip
+    const [uploadUrl] = await Promise.all([
+      getSignedUrl(this.s3, cmd, { expiresIn: 600 }),
+      (async () => {
+        const current = await this.prisma.owners.findUnique({
+          where:  { id: ownerId },
+          select: { verification_docs: true },
+        })
+        const existingDocs: Prisma.InputJsonObject =
+          current?.verification_docs && typeof current.verification_docs === 'object'
+            ? (current.verification_docs as Prisma.InputJsonObject)
+            : {}
+        const updatedDocs: Prisma.InputJsonObject = {
+          ...(existingDocs as Record<string, Prisma.InputJsonValue>),
+          [docType]: key,
+        }
+        await this.prisma.owners.update({
+          where: { id: ownerId },
+          data:  { verification_docs: updatedDocs, updated_at: new Date() },
+        })
+      })(),
+    ])
 
     return { uploadUrl, key }
   }

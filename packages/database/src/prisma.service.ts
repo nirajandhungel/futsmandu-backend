@@ -22,11 +22,19 @@ export class PrismaService
   private isConnected = false
 
   constructor(private readonly config: ConfigService) {
-    const databaseUrl =
+    let databaseUrl =
       config.get<string>('DATABASE_URL') ?? ENV['DATABASE_URL']
 
     if (!databaseUrl) {
       throw new Error('DATABASE_URL is missing')
+    }
+
+    // Inject connection pool size from env — Neon pooler requires this in the URL.
+    // pgbouncer=true enables statement-level pooling; connect_timeout prevents hangs.
+    const poolSize = config.get<string>('DB_POOL_SIZE') ?? ENV['DB_POOL_SIZE'] ?? '5'
+    if (!databaseUrl.includes('connection_limit')) {
+      const sep = databaseUrl.includes('?') ? '&' : '?'
+      databaseUrl += `${sep}connection_limit=${poolSize}&connect_timeout=10&pgbouncer=true`
     }
 
     const nodeEnv = config.get<string>('NODE_ENV') ?? ENV['NODE_ENV']
@@ -54,10 +62,10 @@ export class PrismaService
       errorFormat: nodeEnv === 'production' ? 'minimal' : 'pretty',
     })
 
-    // Log only slow queries (performance visibility without noise)
+    // Log slow queries — threshold 100ms catches real remote-DB latency (150–300ms)
     if (nodeEnv === 'development') {
       this.$on('query', (e: { query: string; duration: number }) => {
-        if (e.duration > 500) {
+        if (e.duration > 100) {
           this.logger.warn(
             `Slow Query (${e.duration}ms): ${e.query}`,
           )

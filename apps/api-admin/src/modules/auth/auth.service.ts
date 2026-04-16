@@ -11,7 +11,8 @@ import { OtpService } from '@futsmandu/auth'
 import type { AdminLoginDto } from './dto/admin-auth.dto.js'
 import { ENV } from '@futsmandu/utils'
 
-const DUMMY_HASH = '$2b$12$kQzFv6Y8WzWjR4o4Fh9J1Oe7gVqM0k7vR9HcU0n6eXvJbAqZ9e9dK'
+// Cost-10 hash of 'dummy_password' — keeps timing consistent for non-existent accounts
+const DUMMY_HASH = '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'
 
 interface AdminJwtPayload {
   sub:   string

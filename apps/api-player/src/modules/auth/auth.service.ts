@@ -12,7 +12,8 @@ import type { RegisterDto, LoginDto } from './dto/auth.dto.js'
 import { OtpService } from '@futsmandu/auth'
 import { ENV } from '@futsmandu/utils'
 
-const DUMMY_HASH = '$2b$12$9z1Kq4xN0k5cE7Qjv1f6iO5qv6q2u1oXn8lTQv9P1YtFz7p0uQJ7G'
+// Cost-10 hash of 'dummy_password' — keeps timing consistent for non-existent accounts
+const DUMMY_HASH = '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'
 
 @Injectable()
 export class AuthService {
@@ -28,6 +29,7 @@ export class AuthService {
   // ── Register ──────────────────────────────────────────────────────────────
   // Updated to NOT auto-verify; OTP required before login
   async register(dto: RegisterDto) {
+    // Select email+phone so we can tell the user exactly which field conflicts
     const existing = await this.prisma.users.findFirst({
       where: { OR: [{ email: dto.email }, { phone: dto.phone }] },
       select: { email: true, phone: true },
@@ -183,7 +185,7 @@ export class AuthService {
       throw new UnauthorizedException('Reset token already used — request a new one')
     }
 
-    const password_hash = await bcrypt.hash(newPassword, 12)
+    const password_hash = await bcrypt.hash(newPassword, 10)  // cost 10 — ~100ms vs 500ms at cost 12
     // Also bump refresh_token_version so all active sessions are invalidated
     await this.prisma.users.update({
       where: { id: payload.sub },

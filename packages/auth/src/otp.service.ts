@@ -68,10 +68,9 @@ export class OtpService {
   ): Promise<GenerateOtpResult> {
     const userIdField = this.userIdField(userType)
 
-    // 1. Invalidate all previous unverified OTPs for this user
-    await this.prisma.email_verification_otps.updateMany({
-      where:  { verified_at: null, [userIdField]: userId },
-      data:   { expires_at: new Date() },
+    // 1. Delete all previous unverified OTPs for this user (DELETE is faster than UPDATE)
+    await this.prisma.email_verification_otps.deleteMany({
+      where: { verified_at: null, [userIdField]: userId },
     })
 
     // 2. Generate OTP + store in DB
@@ -139,7 +138,7 @@ export class OtpService {
       return { success: false, message: 'Invalid or expired OTP' }
     }
 
-    // Already exhausted attempts — expire and bail
+    // Already exhausted attempts — expire and bail (single update, no extra round-trip)
     if (otpRecord.attempts >= otpRecord.max_attempts) {
       await this.prisma.email_verification_otps.update({
         where: { id: otpRecord.id },
@@ -148,20 +147,20 @@ export class OtpService {
       return { success: false, message: 'Invalid or expired OTP' }
     }
 
-    // Increment attempt counter first (prevents race-condition double-spend)
+    // Increment attempt counter + conditionally expire if this is the last allowed attempt
+    // Both happen in ONE UPDATE — saves a round-trip on wrong-code-last-attempt path
     const updated = await this.prisma.email_verification_otps.update({
       where: { id: otpRecord.id },
-      data:  { attempts: { increment: 1 } },
+      data: {
+        attempts:   { increment: 1 },
+        // If this increment pushes us to max_attempts, expire it immediately
+        expires_at: otpRecord.attempts + 1 >= otpRecord.max_attempts
+          ? new Date()
+          : otpRecord.expires_at,
+      },
     })
 
     if (!this.constantTimeCompare(otp, otpRecord.otp)) {
-      // If this was the last allowed attempt, expire immediately
-      if (updated.attempts >= updated.max_attempts) {
-        await this.prisma.email_verification_otps.update({
-          where: { id: otpRecord.id },
-          data:  { expires_at: new Date() },
-        })
-      }
       return { success: false, message: 'Invalid or expired OTP' }
     }
 
@@ -193,20 +192,24 @@ export class OtpService {
     ipAddress?: string,
     userAgent?: string,
   ): Promise<ResendOtpResult> {
-    const user = await this.findUserEmail(userId, userType)
+    const userIdField = this.userIdField(userType)
+
+    // Run both DB reads in parallel — saves one round-trip vs sequential
+    const [user, recentCount] = await Promise.all([
+      this.findUserEmail(userId, userType),
+      this.prisma.email_verification_otps.count({
+        where: {
+          [userIdField]: userId,
+          created_at: { gt: new Date(Date.now() - 60 * 60 * 1_000) },
+        },
+      }),
+    ])
 
     if (!user?.email || user.is_verified) {
       throw new BadRequestException('Unable to resend OTP')
     }
 
     // Rate-limit: max 3 OTP requests per hour
-    const recentCount = await this.prisma.email_verification_otps.count({
-      where: {
-        [this.userIdField(userType)]: userId,
-        created_at: { gt: new Date(Date.now() - 60 * 60 * 1_000) },
-      },
-    })
-
     if (recentCount >= 3) {
       throw new BadRequestException('Too many resend requests. Please wait before trying again.')
     }

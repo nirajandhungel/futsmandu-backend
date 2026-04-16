@@ -985,9 +985,12 @@ model email_verification_otps {
   owner        owners?       @relation("OwnerOtps", fields: [owner_id], references: [id], onDelete: Restrict)
   admin        admins?       @relation("AdminOtps", fields: [admin_id], references: [id], onDelete: Restrict)
 
+  // Composite indexes cover the full active-OTP query:
+  // WHERE {user_id} = ? AND verified_at IS NULL AND expires_at > now()
+  @@index([player_id, verified_at, expires_at])
+  @@index([owner_id,  verified_at, expires_at])
+  @@index([admin_id,  verified_at, expires_at])
+  // Secondary indexes for email lookups and rate-limit count query
   @@index([email, verified_at])
-  @@index([player_id, verified_at])
-  @@index([owner_id, verified_at])
-  @@index([admin_id, verified_at])
   @@index([expires_at, verified_at])
 }
