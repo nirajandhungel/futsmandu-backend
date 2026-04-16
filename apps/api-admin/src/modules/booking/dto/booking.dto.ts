@@ -4,7 +4,7 @@ import {
 } from 'class-validator'
 import { ApiPropertyOptional } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
-import { booking_status } from '@futsmandu/database'
+import { booking_status, booking_source } from '@futsmandu/database'
 
 export class ListBookingsQueryDto {
   @ApiPropertyOptional({ minimum: 1, default: 1 })
@@ -26,6 +26,15 @@ export class ListBookingsQueryDto {
   @IsOptional()
   @IsEnum(booking_status)
   status?: booking_status
+
+  // booking_type does not exist in schema — replaced by booking_source
+  @ApiPropertyOptional({
+    enum: booking_source,
+    description: 'Filter by booking origin: PLAYER_SELF | GROUP_ADMIN | OFFLINE_COUNTER',
+  })
+  @IsOptional()
+  @IsEnum(booking_source)
+  bookingSource?: booking_source
 
   @ApiPropertyOptional({ description: 'Filter by venue UUID' })
   @IsOptional()
