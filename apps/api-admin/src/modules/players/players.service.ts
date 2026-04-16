@@ -99,9 +99,15 @@ export class AdminUsersService {
       this.prisma.bookings.findMany({
         where:   { player_id: userId },
         select: {
-          id: true, status: true, booking_type: true,
-          booking_date: true, start_time: true, end_time: true,
-          total_amount: true, created_at: true,
+          id:             true,
+          status:         true,
+          booking_source: true,   // ← was booking_type (field does not exist in schema)
+          payment_method: true,
+          booking_date:   true,
+          start_time:     true,
+          end_time:       true,
+          total_amount:   true,
+          created_at:     true,
           court: { select: { id: true, name: true } },
           venue: { select: { id: true, name: true } },
         },
@@ -153,10 +159,9 @@ export class AdminUsersService {
         where: { id: userId },
         data:  { is_suspended: false, ban_until: null, updated_at: new Date() },
       })
-      // Mark all active suspension penalties as overridden
       await tx.penalty_history.updateMany({
-        where:  { player_id: userId, penalty_type: 'SUSPENDED', status: 'active' },
-        data:   { status: 'overridden', admin_note: `Reinstated by admin ${adminId}` },
+        where: { player_id: userId, penalty_type: 'SUSPENDED', status: 'active' },
+        data:  { status: 'overridden', admin_note: `Reinstated by admin ${adminId}` },
       })
     })
 
