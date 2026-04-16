@@ -8,6 +8,7 @@ import './instrument.js'
 // Multipart: @fastify/multipart registered for image uploads.
 // JWT: OWNER_JWT_SECRET — completely separate from player and admin.
 
+import * as zlib from 'node:zlib'
 import { NestFactory, Reflector } from '@nestjs/core'
 import {
   FastifyAdapter,
@@ -18,6 +19,7 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger'
 import fastifyHelmet from '@fastify/helmet'
 import fastifyCookie from '@fastify/cookie'
 import fastifyMultipart from '@fastify/multipart'
+import fastifyCompress from '@fastify/compress'
 import { AppModule } from './app.module.js'
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js'
 import { ResponseInterceptor } from './common/interceptors/response.interceptor.js'
@@ -78,6 +80,10 @@ async function bootstrap(): Promise<void> {
     bodyLimit: 5_242_880,
     requestTimeout: 60_000,
     connectionTimeout: 60_000,
+    // LB keepalive must exceed upstream idle timeout (ALB default = 60s → use 75s)
+    keepAliveTimeout: 75_000,
+    routerOptions: { ignoreTrailingSlash: true },
+    disableRequestLogging: IS_PROD,
   })
 
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, {
@@ -88,6 +94,14 @@ async function bootstrap(): Promise<void> {
   await app.register(fastifyHelmet as any, {
     contentSecurityPolicy: false,
     hsts: { maxAge: 31_536_000, includeSubDomains: true, preload: true },
+  })
+
+  // Brotli/gzip compression for all responses ≥1KB
+  await app.register(fastifyCompress as any, {
+    global: true,
+    threshold: 1024,
+    encodings: ['br', 'gzip'],
+    brotliOptions: { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } },
   })
 
   await app.register(fastifyCookie as any, {
