@@ -1,50 +1,44 @@
-// CHANGED: [PgBouncer pool config, S-6 health timeout, P2024 pool-timeout handling]
-// NEW ISSUES FOUND:
-//   - onModuleInit had no timeout on SELECT 1 health check (S-6)
-//   - Pool size was using Prisma default (10) — dangerous with multiple replicas
-
-// packages/database/src/prisma.service.ts
-// NestJS-injectable PrismaClient singleton.
-// Implements OnModuleInit / OnModuleDestroy for clean lifecycle management.
-// PgBouncer-safe: connection_limit per instance, pgbouncer=true required in DATABASE_URL.
-// Pool budget: player-api=5/instance, owner-api=3/instance, worker=2/instance.
-
-import { Injectable, InternalServerErrorException, OnModuleDestroy, OnModuleInit, Logger, Optional } from '@nestjs/common'
+import {
+  Injectable,
+  OnModuleInit,
+  OnModuleDestroy,
+  Logger,
+} from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import * as PrismaGenerated from '../generated/prisma/index.js'
 import { ENV } from '@futsmandu/utils'
 
-// Prisma's generated client is shipped in a shape that doesn't always expose
-// `PrismaClient` as a named ESM export under NodeNext/ESM.
+// Resolve PrismaClient safely for ESM/CJS interop
 const PrismaClient =
-  (PrismaGenerated as any).PrismaClient ?? (PrismaGenerated as any).default?.PrismaClient
+  (PrismaGenerated as any).PrismaClient ??
+  (PrismaGenerated as any).default?.PrismaClient
 
 @Injectable()
-export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+export class PrismaService
+  extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly logger = new Logger(PrismaService.name)
-  private readonly config?: ConfigService
+  private isConnected = false
 
-  constructor(@Optional() config?: ConfigService) {
-    // NOTE: super() must run before any `this.*` access in derived classes.
-    const baseUrl =
-      config?.get<string>('DATABASE_URL', { infer: true }) ??
-      ENV['DATABASE_URL']
-    if (!baseUrl) {
-      throw new InternalServerErrorException('Missing DATABASE_URL')
+  constructor(private readonly config: ConfigService) {
+    const databaseUrl =
+      config.get<string>('DATABASE_URL') ?? ENV['DATABASE_URL']
+
+    if (!databaseUrl) {
+      throw new Error('DATABASE_URL is missing')
     }
 
-    const poolSizeRaw =
-      config?.get<string>('DATABASE_POOL_SIZE') ??
-      config?.get<string>('DB_POOL_SIZE') ??
-      ENV['DB_POOL_SIZE'] ??
-      '5'
-    const poolSize = Number.parseInt(poolSizeRaw, 10)
-    const sep = baseUrl.includes('?') ? '&' : '?'
-    const url = `${baseUrl}${sep}connection_limit=${poolSize}&pool_timeout=10`
+    const nodeEnv = config.get<string>('NODE_ENV') ?? ENV['NODE_ENV']
 
-    const nodeEnv = config?.get<string>('NODE_ENV') ?? ENV['NODE_ENV']
     super({
-      datasources: { db: { url } },
+      datasources: {
+        db: {
+          url: databaseUrl,
+        },
+      },
+
+      // Keep logging minimal in production for performance
       log:
         nodeEnv === 'development'
           ? [
@@ -56,85 +50,97 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
               { emit: 'stdout', level: 'warn' },
               { emit: 'stdout', level: 'error' },
             ],
+
       errorFormat: nodeEnv === 'production' ? 'minimal' : 'pretty',
     })
 
-    this.config = config
-
-    // Ensure Prisma disconnects cleanly when the process is about to exit.
-    // Prisma 5 throws if `$on('beforeExit')` is used with the library engine.
-    try {
-      this.$on('beforeExit', async () => {
-        try {
-          await this.$disconnect()
-        } catch {
-          // best-effort; process is already exiting
-        }
-      })
-    } catch {
-      process.on('beforeExit', async () => {
-        try {
-          await this.$disconnect()
-        } catch {
-          // best-effort
-        }
-      })
-    }
-
+    // Log only slow queries (performance visibility without noise)
     if (nodeEnv === 'development') {
-      // Prisma emits a `query` event. Log only slow queries.
       this.$on('query', (e: { query: string; duration: number }) => {
         if (e.duration > 500) {
-          this.logger.warn(`Slow query (${e.duration}ms): ${e.query}`)
+          this.logger.warn(
+            `Slow Query (${e.duration}ms): ${e.query}`,
+          )
         }
       })
-    }
-
-    // do not connect here; OnModuleInit handles connectivity per requirements
-  }
-
-  async onModuleInit(): Promise<void> {
-    try {
-      await this.$connect()
-    } catch (err: unknown) {
-      this.logger.error('Database unreachable at startup', String(err))
-      // Postgres is a hard dependency; fail fast.
-      process.exit(1)
-    }
-
-    const poolSize =
-      this.config?.get<string>('DATABASE_POOL_SIZE') ??
-      this.config?.get<string>('DB_POOL_SIZE') ??
-      ENV['DB_POOL_SIZE'] ??
-      '5'
-    const node = this.config?.get<string>('HOSTNAME') ?? ENV['HOSTNAME'] ?? 'local'
-    this.logger.log(`✅ Database connected (pool_size=${poolSize}, node=${node})`)
-  }
-
-  async onModuleDestroy(): Promise<void> {
-    try {
-      await this.$disconnect()
-      this.logger.log('Database disconnected')
-    } catch (err: unknown) {
-      this.logger.warn('Database disconnect failed', String(err))
     }
   }
 
   /**
-   * Health check timeout tuned for local/dev network jitter.
-   * Keeps probe bounded while reducing false "degraded" results.
+   * Connect once on app bootstrap
+   * Fail fast if DB is not reachable
+   */
+  async onModuleInit(): Promise<void> {
+    const start = Date.now()
+
+    try {
+      await this.$connect()
+      this.isConnected = true
+
+      const duration = Date.now() - start
+      this.logger.log(`✅ Prisma connected in ${duration}ms`)
+    } catch (err) {
+      this.logger.error('❌ Database connection failed', err as any)
+      throw err
+    }
+  }
+
+  /**
+   * Clean shutdown (Fastify/Nest graceful stop)
+   */
+  async onModuleDestroy(): Promise<void> {
+    try {
+      await this.$disconnect()
+      this.isConnected = false
+      this.logger.log('🛑 Prisma disconnected cleanly')
+    } catch (err) {
+      this.logger.warn('⚠️ Prisma disconnect error', err as any)
+    }
+  }
+
+  /**
+   * Safe health check (NO leaks, NO runaway queries)
    */
   async isHealthy(): Promise<boolean> {
+    if (!this.isConnected) return false
+
     try {
-      await Promise.race([
-        this.$queryRaw`SELECT 1`,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject('DB health check timeout'), 5000),
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('DB health timeout')),
+          3000,
         ),
-      ])
+      )
+
+      await Promise.race([this.$queryRaw`SELECT 1`, timeout])
+
       return true
     } catch {
       return false
+    }
+  }
+
+  /**
+   * Optional: safe query wrapper for observability (use in critical services)
+   */
+  async safeQuery<T>(
+    fn: () => Promise<T>,
+    label = 'db-query',
+  ): Promise<T> {
+    const start = Date.now()
+
+    try {
+      const result = await fn()
+
+      const duration = Date.now() - start
+      if (duration > 300) {
+        this.logger.warn(`⚠️ Slow ${label}: ${duration}ms`)
+      }
+
+      return result
+    } catch (err) {
+      this.logger.error(`❌ Failed ${label}`, err as any)
+      throw err
     }
   }
 }
