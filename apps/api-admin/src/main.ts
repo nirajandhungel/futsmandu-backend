@@ -9,6 +9,7 @@ import './instrument.js'
 // JWT: ADMIN_JWT_SECRET — 8h sessions, 2FA enforced in production.
 // No multipart — admin never uploads files directly (uses presigned R2 URLs).
 
+import * as zlib from 'node:zlib'
 import { NestFactory } from '@nestjs/core'
 import {
   FastifyAdapter,
@@ -18,6 +19,7 @@ import { ValidationPipe, Logger } from '@nestjs/common'
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger'
 import fastifyHelmet from '@fastify/helmet'
 import fastifyCookie from '@fastify/cookie'
+import fastifyCompress from '@fastify/compress'
 import { AppModule } from './app.module.js'
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js'
 import { ResponseInterceptor } from './common/interceptors/response.interceptor.js'
@@ -66,6 +68,9 @@ async function bootstrap(): Promise<void> {
     bodyLimit: 1_048_576, // 1MB — admin never uploads large files
     requestTimeout: 30_000,
     connectionTimeout: 60_000,
+    keepAliveTimeout: 75_000,
+    routerOptions: { ignoreTrailingSlash: true },
+    disableRequestLogging: IS_PROD,
   })
 
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, {
@@ -77,6 +82,14 @@ async function bootstrap(): Promise<void> {
     contentSecurityPolicy: IS_PROD ? undefined : false, // Strict CSP in prod for admin panel
     hsts: { maxAge: 31_536_000, includeSubDomains: true, preload: true },
     frameguard: { action: 'deny' }, // Admin panel must never be embedded in iframes
+  })
+
+  // Brotli/gzip compression for all responses ≥1KB
+  await app.register(fastifyCompress as any, {
+    global: true,
+    threshold: 1024,
+    encodings: ['br', 'gzip'],
+    brotliOptions: { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } },
   })
 
   // HTTP-only cookie for admin sessions (browser-based dashboard)

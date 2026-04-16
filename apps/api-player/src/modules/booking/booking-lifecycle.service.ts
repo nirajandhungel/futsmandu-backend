@@ -110,7 +110,8 @@ export class BookingLifecycleService {
 
       const booking = await tx.bookings.create({
         data: {
-          booking_type: 'online',
+          // FIX: schema has no `booking_type` column. Source is PLAYER_SELF for self-serve holds.
+          booking_source: 'PLAYER_SELF',
           player_id: playerId,
           court_id: dto.courtId,
           venue_id: court.venue_id,
@@ -123,7 +124,8 @@ export class BookingLifecycleService {
           applied_rule_id: ruleId ?? null,
           status: 'HELD',
           hold_expires_at: new Date(Date.now() + 7 * 60 * 1000),
-          created_by: playerId,
+          // FIX: schema uses created_by_user_id (XOR constraint — exactly one creator must be set)
+          created_by_user_id: playerId,
           booking_meta: bookingMeta as Prisma.InputJsonValue,
         },
       })
@@ -179,10 +181,12 @@ export class BookingLifecycleService {
       const maxPlayers = meta.maxPlayers ?? court?.capacity ?? 10
       const minPlayers = meta.requiredPlayers ?? court?.min_players ?? 4
 
-      const isFlexOrPartial = meta.bookingType === 'FLEX' || meta.bookingType === 'PARTIAL';
-      const effectiveJoinMode = isFlexOrPartial ? 'OPEN' : (meta.joinMode ?? 'INVITE_ONLY');
-      const effectiveSplitMode = isFlexOrPartial ? 'SPLIT_EQUAL' : (meta.costSplitMode ?? 'ADMIN_PAYS_ALL');
+      const isFlexOrPartial = meta.bookingType === 'FLEX' || meta.bookingType === 'PARTIAL'
+      const effectiveJoinMode = isFlexOrPartial ? 'OPEN' : (meta.joinMode ?? 'INVITE_ONLY')
+      const effectiveSplitMode = isFlexOrPartial ? 'SPLIT_EQUAL' : (meta.costSplitMode ?? 'ADMIN_PAYS_ALL')
 
+      // FIX: schema removed `slots_available` as a stored column (comment: "Derived fields removed;
+      // compute at query time"). Do not include it in create data.
       const matchGroup = await tx.match_groups.create({
         data: {
           booking_id: bookingId,
@@ -199,7 +203,6 @@ export class BookingLifecycleService {
           auto_accept: isFlexOrPartial,
           cost_split_mode: effectiveSplitMode,
           description: meta.description ?? null,
-          slots_available: Math.max(maxPlayers - 1, 0),
         },
       })
 
@@ -234,8 +237,8 @@ export class BookingLifecycleService {
     const existingPayment = await this.prisma.payments.findUnique({ where: { booking_id: bookingId } })
     if (existingPayment) return existingPayment
     return this.prisma.$transaction(async (tx: any) => {
-      const payment = await tx.payments.create({ data: { booking_id: bookingId, player_id: playerId, amount: booking.total_amount, gateway, status: 'INITIATED' } })
-      await tx.bookings.update({ where: { id: bookingId }, data: { status: 'PENDING_PAYMENT', hold_expires_at: new Date(Date.now() + 10 * 60 * 1000), updated_at: new Date() } })
+      const payment = await tx.payments.create({ data: { booking_id: bookingId, player_id: playerId, amount: booking.total_amount, gateway, payment_method: gateway, status: 'INITIATED' } })
+      await tx.bookings.update({ where: { id: bookingId }, data: { status: 'PENDING_PAYMENT', payment_method: gateway, hold_expires_at: new Date(Date.now() + 10 * 60 * 1000), updated_at: new Date() } })
       return payment
     }, { isolationLevel: 'ReadCommitted' })
   }

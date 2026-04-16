@@ -44,14 +44,14 @@ export class MediaOrphanCleanupProcessor extends WorkerHost {
       const orphans = await this.prisma.media_assets.findMany({
         where: {
           status: 'processing',
-          updatedAt: { lt: cutoff },
+          updated_at: { lt: cutoff },
         },
         select: {
           id: true,
-          key: true,
+          file_key: true,
         },
         take: batchSize,
-        orderBy: { updatedAt: 'asc' },
+        orderBy: { updated_at: 'asc' },
       })
 
       if (orphans.length === 0) {
@@ -68,15 +68,15 @@ export class MediaOrphanCleanupProcessor extends WorkerHost {
         const batch = orphans.slice(i, i + parallelBatches)
         
         const results = await Promise.allSettled(
-          batch.map(async (orphan: { id: string; key: string }) => {
+          batch.map(async (orphan: { id: string; file_key: string }) => {
             try {
-              const exists = await this.objectExists(orphan.key)
+              const exists = await this.objectExists(orphan.file_key)
               if (exists) {
-                await this.deleteObject(orphan.key)
+                await this.deleteObject(orphan.file_key)
               }
               await this.prisma.media_assets.update({
                 where: { id: orphan.id },
-                data: { status: 'failed', updatedAt: new Date() },
+                data: { status: 'failed', updated_at: new Date() },
               })
               return { success: true, id: orphan.id }
             } catch (err) {

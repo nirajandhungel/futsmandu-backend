@@ -32,14 +32,14 @@ export class OwnerAuthService {
   // ── Register ──────────────────────────────────────────────────────────────
   // Updated to NOT auto-verify; OTP required before login
   async register(dto: RegisterOwnerDto) {
-    const existing = await this.prisma.owners.findFirst({
-      where: { OR: [{ email: dto.email }, { phone: dto.phone }] },
-      select: { email: true, phone: true },
-    })
-    if (existing) {
-      const field = existing.email === dto.email ? 'email' : 'phone'
-      throw new ConflictException(`An owner account with this ${field} already exists`)
-    }
+    const [emailExists, phoneExists] = await Promise.all([
+  this.prisma.owners.findUnique({ where: { email: dto.email }, select: { id: true } }),
+  this.prisma.owners.findUnique({ where: { phone: dto.phone }, select: { id: true } }),
+])
+
+if (emailExists || phoneExists) {
+  throw new ConflictException('Owner already exists')
+}
 
     const password_hash = await bcrypt.hash(dto.password, 12)
     const owner = await this.prisma.owners.create({

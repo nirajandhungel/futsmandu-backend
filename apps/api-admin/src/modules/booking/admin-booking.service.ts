@@ -1,13 +1,14 @@
 import {
-  Injectable, BadRequestException, NotFoundException, Logger,
+  Injectable, Logger,
 } from '@nestjs/common'
 import { PrismaService } from '@futsmandu/database'
-import type { booking_status } from '@futsmandu/database'
+import type { booking_status, booking_source } from '@futsmandu/database'
 
 interface ListBookingsQuery {
   page?: number
   limit?: number
   status?: booking_status
+  bookingSource?: booking_source
   venueId?: string
   playerId?: string
   dateFrom?: string
@@ -34,23 +35,24 @@ export class AdminBookingService {
 
     const where: Record<string, unknown> = {}
 
-    if (query.status) where['status'] = query.status
-    if (query.venueId) where['venue_id'] = query.venueId
-    if (query.playerId) where['player_id'] = query.playerId
+    if (query.status)        where['status']         = query.status
+    if (query.bookingSource) where['booking_source'] = query.bookingSource
+    if (query.venueId)       where['venue_id']       = query.venueId
+    if (query.playerId)      where['player_id']      = query.playerId
 
     if (query.dateFrom || query.dateTo) {
       where['booking_date'] = {
         ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
-        ...(query.dateTo ? { lte: new Date(query.dateTo) } : {}),
+        ...(query.dateTo   ? { lte: new Date(query.dateTo)   } : {}),
       }
     }
 
     if (query.search?.trim()) {
       const search = query.search.trim()
       where['OR'] = [
-        { id: { contains: search, mode: 'insensitive' } },
-        { venue: { name: { contains: search, mode: 'insensitive' } } },
-        { player: { name: { contains: search, mode: 'insensitive' } } },
+        { id:     { contains: search, mode: 'insensitive' } },
+        { venue:  { name:  { contains: search, mode: 'insensitive' } } },
+        { player: { name:  { contains: search, mode: 'insensitive' } } },
         { player: { email: { contains: search, mode: 'insensitive' } } },
         { player: { phone: { contains: search, mode: 'insensitive' } } },
       ]
@@ -60,18 +62,21 @@ export class AdminBookingService {
       this.prisma.bookings.findMany({
         where,
         select: {
-          id: true,
-          booking_type: true,
-          status: true,
-          booking_date: true,
-          start_time: true,
-          end_time: true,
-          total_amount: true,
-          refund_status: true,
-          created_at: true,
-          player: { select: { id: true, name: true, email: true, phone: true } },
-          venue: { select: { id: true, name: true, slug: true } },
-          court: { select: { id: true, name: true } },
+          id:             true,
+          booking_source: true,   // ← was booking_type (does not exist in schema)
+          payment_method: true,
+          status:         true,
+          booking_date:   true,
+          start_time:     true,
+          end_time:       true,
+          duration_mins:  true,
+          total_amount:   true,
+          refund_status:  true,
+          refund_amount:  true,
+          created_at:     true,
+          player:  { select: { id: true, name: true, email: true, phone: true } },
+          venue:   { select: { id: true, name: true, slug: true } },
+          court:   { select: { id: true, name: true } },
           payment: { select: { id: true, status: true, gateway: true, amount: true } },
         },
         orderBy: { created_at: 'desc' },
@@ -92,10 +97,6 @@ export class AdminBookingService {
     }
   }
 
-
-
-
-
   async getOverview(query: BookingOverviewQuery) {
     const now = new Date()
     const where: Record<string, unknown> = {}
@@ -105,7 +106,7 @@ export class AdminBookingService {
     if (query.dateFrom || query.dateTo) {
       where['booking_date'] = {
         ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
-        ...(query.dateTo ? { lte: new Date(query.dateTo) } : {}),
+        ...(query.dateTo   ? { lte: new Date(query.dateTo)   } : {}),
       }
     }
 
@@ -124,13 +125,13 @@ export class AdminBookingService {
       this.prisma.bookings.count({
         where: {
           ...where,
-          status: 'CONFIRMED',
+          status:       'CONFIRMED',
           booking_date: { gte: now },
         },
       }),
       this.prisma.bookings.aggregate({
         where: { ...where, status: 'CONFIRMED' },
-        _sum: { total_amount: true },
+        _sum:  { total_amount: true },
       }),
     ])
 

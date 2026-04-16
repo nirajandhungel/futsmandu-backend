@@ -1,10 +1,9 @@
 // apps/admin-api/src/modules/admin-venues/admin-venues.service.ts
-// ─── ADDITIVE UPDATE ──────────────────────────────────────────────────────────
-// CHANGED: getOwnerDocUrl() now uses media.getKycDocSignedUrl() — handles any
-//          file extension (jpg/png/webp/pdf), not just .pdf.
-// CHANGED: getVenueVerificationUrl() now uses media.getVenueVerificationSignedUrl().
-// NEW:     listPendingVenues() includes cover_image_signed_url (additive).
-// ALL other methods untouched.
+// ─── SCHEMA FIX ───────────────────────────────────────────────────────────────
+// venues:  isApproved → is_verified, approvedAt → approved_at, approvedById → approved_by_id
+// owners:  isKycApproved → is_kyc_approved, kycApprovedAt → kyc_approved_at,
+//          kycApprovedById → kyc_approved_by_id
+// All field names are now aligned with the Prisma schema (snake_case throughout).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
@@ -63,9 +62,10 @@ export class AdminVenuesService {
     const PAGE_SIZE = 20
     const skip = (page - 1) * PAGE_SIZE
 
+    // Pending = not yet verified (is_verified: false) and still active
     const [venues, total] = await Promise.all([
       this.prisma.venues.findMany({
-        where: { isApproved: false, is_active: true },
+        where: { is_verified: false, is_active: true },   // ← was: isApproved (does not exist)
         select: {
           id: true, name: true, slug: true, address: true,
           cover_image_url: true,
@@ -77,10 +77,10 @@ export class AdminVenuesService {
         skip,
         take: PAGE_SIZE,
       }),
-      this.prisma.venues.count({ where: { isApproved: false, is_active: true } }),
+      this.prisma.venues.count({ where: { is_verified: false, is_active: true } }),
     ])
 
-    // Additive: signed cover image URL for admin review panel
+    // Signed cover image URL for admin review panel
     const enriched = await Promise.all(
       venues.map(async (v: typeof venues[number]) => {
         const cover_image_signed_url = v.cover_image_url
@@ -130,29 +130,33 @@ export class AdminVenuesService {
     await this.prisma.venues.update({
       where: { id: venueId },
       data: {
-        isApproved:   true,
-        approvedAt:   new Date(),
-        approvedById: adminId,
-        is_verified:  true,
-        updated_at:   new Date(),
+        is_verified:    true,          // ← was: isApproved (does not exist)
+        approved_at:    new Date(),    // ← was: approvedAt
+        approved_by_id: adminId,       // ← was: approvedById
+        updated_at:     new Date(),
       },
     })
 
     await this.prisma.owners.update({
       where: { id: venue.owner.id },
       data: {
-        isKycApproved:   true,
-        kycApprovedAt:   new Date(),
-        kycApprovedById: adminId,
-        is_verified:     true,
-        updated_at:      new Date(),
+        is_kyc_approved:    true,      // ← was: isKycApproved (does not exist)
+        kyc_approved_at:    new Date(), // ← was: kycApprovedAt
+        kyc_approved_by_id: adminId,   // ← was: kycApprovedById
+        is_verified:        true,
+        updated_at:         new Date(),
       },
     })
 
     await this.emailQueue
       .add(
         'verification-approved',
-        { type: 'verification-approved', to: venue.owner.email, name: venue.owner.name, data: { venueName: venue.name } },
+        {
+          type: 'verification-approved',
+          to:   venue.owner.email,
+          name: venue.owner.name,
+          data: { venueName: venue.name },
+        },
         { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
       )
       .catch((e: unknown) => this.logger.error('Email queue error', e))
@@ -174,27 +178,27 @@ export class AdminVenuesService {
     await this.prisma.venues.update({
       where: { id: venueId },
       data: {
-        isApproved:   false,
-        approvedAt:   null,
-        approvedById: null,
-        is_verified:  false,
-        is_active:    false,
-        updated_at:   new Date(),
+        is_verified:    false,   // ← was: isApproved
+        approved_at:    null,    // ← was: approvedAt
+        approved_by_id: null,    // ← was: approvedById
+        is_active:      false,
+        updated_at:     new Date(),
       },
     })
 
+    // Revoke owner KYC only if no other approved venues remain
     const remainingApproved = await this.prisma.venues.count({
-      where: { owner_id: venue.owner.id, isApproved: true, is_active: true },
+      where: { owner_id: venue.owner.id, is_verified: true, is_active: true }, // ← was: isApproved
     })
     if (remainingApproved === 0) {
       await this.prisma.owners.update({
         where: { id: venue.owner.id },
         data: {
-          isKycApproved:   false,
-          kycApprovedAt:   null,
-          kycApprovedById: null,
-          is_verified:     false,
-          updated_at:      new Date(),
+          is_kyc_approved:    false,  // ← was: isKycApproved
+          kyc_approved_at:    null,   // ← was: kycApprovedAt
+          kyc_approved_by_id: null,   // ← was: kycApprovedById
+          is_verified:        false,
+          updated_at:         new Date(),
         },
       })
     }
@@ -202,7 +206,12 @@ export class AdminVenuesService {
     await this.emailQueue
       .add(
         'verification-rejected',
-        { type: 'verification-rejected', to: venue.owner.email, name: venue.owner.name, data: { venueName: venue.name, reason } },
+        {
+          type: 'verification-rejected',
+          to:   venue.owner.email,
+          name: venue.owner.name,
+          data: { venueName: venue.name, reason },
+        },
         { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 200 },
       )
       .catch((e: unknown) => this.logger.error('Email queue error', e))
@@ -212,13 +221,11 @@ export class AdminVenuesService {
   }
 
   // ── Admin-only: signed GET URL for KYC doc ─────────────────────────────────
-  // UPDATED: now uses getKycDocSignedUrl which handles any file extension
   async getOwnerDocUrl(ownerId: string, docType: string): Promise<{ downloadUrl: string; expiresIn: number }> {
     return this.media.getKycDocUrl(ownerId, docType, 600)
   }
 
   // ── Admin venue verification image ─────────────────────────────────────────
-  // UPDATED: now uses getVerificationDocUrl
   async getVenueVerificationUrl(venueId: string, key: string): Promise<{ downloadUrl: string; expiresIn: number }> {
     return this.media.getVerificationDocUrl(venueId, key, 600)
   }
@@ -236,7 +243,7 @@ export class AdminVenuesService {
       asset_id:    img.assetId,
       cdn_url:     img.cdnUrl,
       signed_url:  img.signedUrl ?? null,
-      webp_url:    img.webpUrl ?? null,
+      webp_url:    img.webpUrl  ?? null,
       uploaded_at: img.uploadedAt,
     }))
   }

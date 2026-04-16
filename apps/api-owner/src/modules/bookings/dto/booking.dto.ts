@@ -1,10 +1,3 @@
-// CHANGED: [SEC-6 start_time @Matches HH:MM, DTO hardening @Transform trim, @IsEnum for status]
-// NEW ISSUES FOUND:
-//   - start_time accepted "99:99", "abc", etc. — no format validation (SEC-6)
-//   - status used @IsIn([...]) string array instead of @IsEnum — no type safety
-//   - customer_phone had @MaxLength(15) but no phone format validation
-//   - ListBookingsQueryDto page had no @IsInt or @Min validation
-
 // apps/owner-admin-api/src/modules/bookings/dto/booking.dto.ts
 import {
   IsString, IsNotEmpty, IsDateString, IsIn, IsOptional,
@@ -34,9 +27,11 @@ export class CreateOfflineBookingDto {
   @IsString()
   start_time!: string
 
-  @ApiProperty({ enum: ['offline_cash', 'offline_paid', 'offline_reserved'] })
-  @IsIn(['offline_cash', 'offline_paid', 'offline_reserved'])
-  booking_type!: string
+  // Schema payment_method enum: CASH | KHALTI | ESEWA | BANK_TRANSFER
+  // For offline (counter) bookings, CASH is the typical value.
+  @ApiProperty({ enum: ['CASH', 'KHALTI', 'ESEWA', 'BANK_TRANSFER'], example: 'CASH' })
+  @IsIn(['CASH', 'KHALTI', 'ESEWA', 'BANK_TRANSFER'])
+  payment_method!: string
 
   @ApiProperty()
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
@@ -67,11 +62,12 @@ export class ListBookingsQueryDto {
   @IsUUID('4')
   courtId?: string
 
+  // Full booking_status enum from schema
   @ApiPropertyOptional({
-    enum: ['HELD', 'PENDING_PAYMENT', 'CONFIRMED', 'CANCELLED', 'NO_SHOW', 'COMPLETED'],
+    enum: ['HELD', 'PENDING_PAYMENT', 'CONFIRMED', 'CANCELLED', 'EXPIRED', 'NO_SHOW', 'COMPLETED'],
   })
   @IsOptional()
-  @IsIn(['HELD', 'PENDING_PAYMENT', 'CONFIRMED', 'CANCELLED', 'NO_SHOW', 'COMPLETED'])
+  @IsIn(['HELD', 'PENDING_PAYMENT', 'CONFIRMED', 'CANCELLED', 'EXPIRED', 'NO_SHOW', 'COMPLETED'])
   status?: string
 
   @ApiPropertyOptional({ minimum: 1 })

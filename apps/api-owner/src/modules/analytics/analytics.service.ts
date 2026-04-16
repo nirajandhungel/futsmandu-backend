@@ -143,28 +143,38 @@ export class AnalyticsService {
       },
     })
 
-    const results = await Promise.all(
-      courts.map(async (court: any) => {
-        const [total, noShows] = await Promise.all([
-          this.prisma.bookings.count({
-            where: { court_id: court.id, status: { in: ['CONFIRMED', 'COMPLETED', 'NO_SHOW'] }, ...dateFilter },
-          }),
-          this.prisma.bookings.count({
-            where: { court_id: court.id, status: 'NO_SHOW', ...dateFilter },
-          }),
-        ])
-        return {
-          courtId:   court.id,
-          courtName: court.name,
-          venueName: court.venue.name,
-          total,
-          noShows,
-          rate: total > 0 ? +((noShows / total) * 100).toFixed(1) : 0,
-        }
-      }),
-    )
+    if (courts.length === 0) return []
+    const courtIds = courts.map((c: any) => c.id)
 
-    return results
+    // PERF: Replace N+1 queries with a single database groupBy
+    const stats = await this.prisma.bookings.groupBy({
+      by: ['court_id', 'status'],
+      where: { court_id: { in: courtIds }, status: { in: ['CONFIRMED', 'COMPLETED', 'NO_SHOW'] }, ...dateFilter },
+      _count: { id: true },
+    })
+
+    const courtStats = new Map<string, { total: number, noShows: number }>()
+    for (const id of courtIds) courtStats.set(id, { total: 0, noShows: 0 })
+
+    for (const stat of stats) {
+      const c = courtStats.get(stat.court_id)
+      if (c) {
+        c.total += stat._count.id
+        if (stat.status === 'NO_SHOW') c.noShows += stat._count.id
+      }
+    }
+
+    return courts.map((court: any) => {
+      const { total, noShows } = courtStats.get(court.id)!
+      return {
+        courtId:   court.id,
+        courtName: court.name,
+        venueName: court.venue.name,
+        total,
+        noShows,
+        rate: total > 0 ? +((noShows / total) * 100).toFixed(1) : 0,
+      }
+    })
   }
 
   // ── Cache invalidation — call after booking confirmed/cancelled ──────────
@@ -174,11 +184,17 @@ export class AnalyticsService {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   private async getOwnerVenueIds(ownerId: string): Promise<string[]> {
+    const cacheKey = `owner:${ownerId}:venue_ids`
+    const cached = await this.redis.get<string[]>(cacheKey)
+    if (cached) return cached
+
     const venues = await this.prisma.venues.findMany({
       where: { owner_id: ownerId },
       select: { id: true },
     })
-    return venues.map((v: any) => v.id)
+    const ids = venues.map((v: any) => v.id)
+    await this.redis.set(cacheKey, ids, 3600) // Cache venue list for 1 hour
+    return ids
   }
 
   private buildDateFilter(query: DateRangeQuery): Record<string, unknown> {

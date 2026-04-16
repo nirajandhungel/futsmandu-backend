@@ -1,3 +1,4 @@
+// apps/owner-admin-api/src/modules/bookings/bookings.controller.ts
 import {
   Controller, Get, Post, Put, Body, Param, Query, UseGuards,
 } from '@nestjs/common'
@@ -32,6 +33,7 @@ export class BookingsController {
   @Post('offline')
   @ApiOperation({ summary: 'Create walk-in offline booking' })
   createOffline(@CurrentOwner() owner: AuthOwner, @Body() dto: CreateOfflineBookingDto) {
+    // owner.id used for both ownerId (venue scoping) and staffId (created_by_owner_id)
     return this.bookings.createOfflineBooking(owner.id, owner.id, dto)
   }
 

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { PrismaService } from '@futsmandu/database'
 import { ENV } from '@futsmandu/utils'
+import { ConfigService } from '@nestjs/config'
 
 type PlatformSeedItem = {
   key: string
@@ -55,7 +56,7 @@ async function main() {
     throw new Error('DATABASE_URL is not set')
   }
 
-  const prisma = new PrismaService()
+  const prisma = new PrismaService(new ConfigService())
   try {
     await prisma.$connect()
 

@@ -10,6 +10,7 @@ import './instrument.js'
 // NestJS bootstrapped with FastifyAdapter.
 // Fails fast at startup if any required env var is missing.
 
+import * as zlib from 'node:zlib'
 import { NestFactory, Reflector } from '@nestjs/core'
 import {
   FastifyAdapter,
@@ -19,6 +20,7 @@ import { ValidationPipe, Logger } from '@nestjs/common'
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger'
 import fastifyHelmet from '@fastify/helmet'
 import fastifyCookie from '@fastify/cookie'
+import fastifyCompress from '@fastify/compress'
 import { AppModule } from './app.module.js'
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js'
 import { ResponseInterceptor } from './common/interceptors/response.interceptor.js'
@@ -75,6 +77,12 @@ async function bootstrap(): Promise<void> {
     bodyLimit: 1_048_576,
     requestTimeout: 30_000,
     connectionTimeout: 60_000,
+    // LB keepalive must exceed upstream idle timeout (ALB default = 60s → use 75s)
+    keepAliveTimeout: 75_000,
+    // Avoid 404s from clients that append/omit trailing slashes
+    routerOptions: { ignoreTrailingSlash: true },
+    // Disable per-request logging in prod — Pino level:warn still captures errors
+    disableRequestLogging: IS_PROD,
   })
 
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, {
@@ -85,6 +93,15 @@ async function bootstrap(): Promise<void> {
   await app.register(fastifyHelmet as any, {
     contentSecurityPolicy: false,
     hsts: { maxAge: 31_536_000, includeSubDomains: true, preload: true },
+  })
+
+  // Compress all responses ≥1KB with brotli (preferred) then gzip.
+  // Benchmark shows ~35-60% size reduction for typical JSON API payloads.
+  await app.register(fastifyCompress as any, {
+    global: true,
+    threshold: 1024,               // skip tiny payloads — compression overhead not worth it
+    encodings: ['br', 'gzip'],     // brotli first; gzip fallback for older clients
+    brotliOptions: { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } },
   })
 
   await app.register(fastifyCookie as any)

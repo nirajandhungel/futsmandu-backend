@@ -1,5 +1,6 @@
 // packages/media-core/src/interfaces/media.interfaces.ts
-// Single source of truth for all media types across the platform.
+// OPTIMIZED: Added thumbKey to all relevant interfaces, instant-preview fields,
+// and a slim ConfirmUploadResult that returns URL immediately (no blocking).
 
 export type AssetType =
   | 'player_profile'
@@ -37,11 +38,14 @@ export interface RequestUploadUrlOptions {
 }
 
 export interface UploadUrlResult {
-  assetId:   string
-  uploadUrl: string
-  key:       string
-  cdnUrl?:   string   // only for public assets
-  expiresIn: number
+  assetId:    string
+  uploadUrl:  string
+  key:        string
+  /** Public CDN URL for instant optimistic display BEFORE processing completes */
+  cdnUrl?:    string
+  /** Predicted WebP key (may 404 until processing finishes — use cdnUrl for instant display) */
+  webpKey?:   string
+  expiresIn:  number
 }
 
 export interface ConfirmUploadOptions {
@@ -51,14 +55,23 @@ export interface ConfirmUploadOptions {
   assetType: AssetType
 }
 
+/**
+ * Returned immediately after confirm — DO NOT block on processing.
+ * UI should show cdnUrl instantly; poll /status/:assetId for webpKey once ready.
+ */
 export interface ConfirmUploadResult {
-  message:  string
-  assetId:  string
-  webpKey?: string | null
+  message:   string
+  assetId:   string
+  /** Original CDN URL — available immediately, before any processing */
+  cdnUrl?:   string
+  /** Only populated after worker finishes (will be null on first response) */
+  webpKey?:  string | null
+  thumbKey?: string | null
+  status:    AssetStatus
 }
 
 export interface SignedDownloadUrlOptions {
-  key:       string
+  key:        string
   expiresIn?: number  // default 600s
 }
 
@@ -78,12 +91,18 @@ export interface GalleryItem {
   cdnUrl:     string
   signedUrl?: string
   webpUrl?:   string
+  /** 400×300 WebP thumbnail — use this in list views, NOT full webpUrl */
+  thumbUrl?:  string
   uploadedAt: Date
+  status:     AssetStatus
 }
 
 export interface UploadStatusResult {
-  status:   AssetStatus
-  progress: number  // 0-100
-  webpKey?: string | null
-  error?:   string
+  status:    AssetStatus
+  progress:  number       // 0-100
+  webpKey?:  string | null
+  thumbKey?: string | null
+  /** CDN URL of the thumb — populated once processing is done */
+  thumbUrl?: string | null
+  error?:    string
 }

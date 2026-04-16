@@ -1,53 +1,125 @@
 // packages/media/src/media.module.ts
 
-import { Global, Module, DynamicModule } from '@nestjs/common'
-import { S3Client } from '@aws-sdk/client-s3'
-import { MediaService } from './media.service.js'
-import { StorageModule } from './storage.module.js'
+import {
+  Module,
+  DynamicModule,
+  Global,
+} from '@nestjs/common'
+
+import { BullModule } from '@nestjs/bullmq'
+
+import { StorageModule, StorageService } from '@futsmandu/media-storage'
+import { DatabaseModule } from '@futsmandu/database'
+import { RedisModule } from '@futsmandu/redis'
 import { QueuesModule } from '@futsmandu/queues'
+
+import { QUEUE_IMAGE_PROCESSING } from '@futsmandu/queues'
+import { ENV } from '@futsmandu/utils'
+
+import { MediaService } from './media.service.js'
+
 import {
   ImageProcessingProcessor,
   S3_CLIENT_TOKEN,
   S3_BUCKET_NAME_TOKEN,
 } from '@futsmandu/media-processing'
-import { ENV } from '@futsmandu/utils'
 
-// The processor needs a raw S3Client (for streaming GetObject/PutObject).
-// We provide it here using the same env vars as StorageService.
-const s3ClientProvider = {
-  provide:    S3_CLIENT_TOKEN,
-  useFactory: () => {
-    return new S3Client({
-      region:         ENV['S3_REGION']  || 'auto',
-      endpoint:       ENV['S3_ENDPOINT'] || '',
-      forcePathStyle: ENV['S3_FORCE_PATH_STYLE'] === 'true',
-      credentials: {
-        accessKeyId:     ENV['S3_ACCESS_KEY'] || '',
-        secretAccessKey: ENV['S3_SECRET_KEY'] || '',
-      },
-    })
+/* ───────────────────────────────────────────────
+   SAFE ENV VALIDATION (prevents silent failures)
+─────────────────────────────────────────────── */
+
+function requireEnv(key: keyof typeof ENV): string {
+  const value = ENV[key] as string | undefined
+  if (!value) {
+    throw new Error(`[MediaModule] Missing env: ${String(key)}`)
+  }
+  return value
+}
+
+/* ───────────────────────────────────────────────
+   S3 Providers (single source of truth)
+─────────────────────────────────────────────── */
+
+const S3_PROVIDERS = [
+  {
+    provide: S3_CLIENT_TOKEN,
+    useFactory: (storage: StorageService) => {
+      // ensures StorageModule is the ONLY S3 owner
+      return storage.s3Client
+    },
+    inject: [StorageService],
   },
-}
 
-const s3BucketProvider = {
-  provide:    S3_BUCKET_NAME_TOKEN,
-  useFactory: () => ENV['S3_BUCKET'] || '',
-}
+  {
+    provide: S3_BUCKET_NAME_TOKEN,
+    useFactory: () => requireEnv('S3_BUCKET'),
+  },
+]
+
+/* ───────────────────────────────────────────────
+   MODULE
+─────────────────────────────────────────────── */
 
 @Global()
 @Module({
-  imports:   [QueuesModule, StorageModule.register()],
-  providers: [s3ClientProvider, s3BucketProvider, MediaService],
-  exports:   [MediaService],
+  imports: [
+    DatabaseModule,
+    StorageModule.register(),
+    RedisModule,
+    QueuesModule,
+  ],
+
+  providers: [
+    MediaService,
+    ...S3_PROVIDERS,
+  ],
+
+  exports: [
+    MediaService,
+  ],
 })
 export class MediaModule {
-  /** Use in the worker app to also register the BullMQ processor. */
+
+  /**
+   * API MODE
+   * - used by owner-api / user-api
+   * - NO workers registered
+   */
+  static forApi(): DynamicModule {
+    return {
+      module: MediaModule,
+    }
+  }
+
+  /**
+   * WORKER MODE
+   * - used by image-processing worker
+   * - includes BullMQ processor
+   */
   static forWorker(): DynamicModule {
     return {
-      module:    MediaModule,
-      imports:   [QueuesModule, StorageModule.register()],
-      providers: [s3ClientProvider, s3BucketProvider, MediaService, ImageProcessingProcessor],
-      exports:   [MediaService],
+      module: MediaModule,
+
+      imports: [
+        DatabaseModule,
+        StorageModule.register(),
+        RedisModule,
+        QueuesModule,
+
+        BullModule.registerQueue({
+          name: QUEUE_IMAGE_PROCESSING,
+        }),
+      ],
+
+      providers: [
+        MediaService,
+        ...S3_PROVIDERS,
+        ImageProcessingProcessor,
+      ],
+
+      exports: [
+        MediaService,
+      ],
     }
   }
 }

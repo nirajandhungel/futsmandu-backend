@@ -16,9 +16,9 @@ class OverridePenaltyDto {
 }
 
 class ResolveDisputeDto {
-  @ApiProperty({ enum: ['resolved_noshow', 'resolved_cleared'] })
-  @IsIn(['resolved_noshow', 'resolved_cleared'])
-  resolution!: 'resolved_noshow' | 'resolved_cleared'
+  @ApiProperty({ enum: ['resolved', 'rejected'], description: 'resolved = no-show confirmed; rejected = dispute accepted, player cleared' })
+  @IsIn(['resolved', 'rejected'])
+  resolution!: 'resolved' | 'rejected'
 }
 
 @ApiTags('Admin — Penalties')

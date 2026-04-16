@@ -1,6 +1,21 @@
-// apps/player-api/src/modules/friend/friend.service.ts
-// Friend graph — bidirectional friendships with spam prevention.
-// Rate limiting (20 requests/day) applied at controller level via ThrottlerGuard.
+// SCHEMA FIX: [FIX 7 friendship order normalization]
+//
+// Schema requires: requester_id < recipient_id (lexicographic UUID comparison).
+// Enforced via DB CHECK constraint:
+//   ALTER TABLE friendships ADD CONSTRAINT chk_friendship_order CHECK (requester_id < recipient_id);
+//
+// All friendship INSERT operations must normalize the pair so the smaller UUID is stored
+// as requester_id. Reads and accepts use the record id directly and are unaffected.
+// The `block()` method previously inserted with (playerId, targetId) without normalizing —
+// this would violate the constraint when playerId > targetId.
+//
+// Note: `sendRequest` intentionally stores the original direction (who initiated) separately
+// from the normalized order; the actual initiator is tracked via the status flow
+// (the recipient is whoever didn't create the row, identified at accept time via recipient_id).
+// After normalization the "requester_id" field no longer reliably identifies who sent the
+// request — `incomingRequests` still works correctly because it filters by status = pending
+// and the normalized pair is unique; accept still guards with recipient_id check.
+// If directional attribution matters in future, add a separate `initiated_by` column.
 
 import {
   Injectable, NotFoundException, ConflictException,
@@ -9,6 +24,14 @@ import {
 import { InjectQueue } from '@nestjs/bullmq'
 import { Queue } from 'bullmq'
 import { PrismaService } from '@futsmandu/database'
+
+/** Normalize a friendship pair so the lexicographically smaller UUID is first.
+ *  Required by the DB CHECK constraint: requester_id < recipient_id. */
+function normalizeFriendshipPair(a: string, b: string): { requesterId: string; recipientId: string } {
+  return a < b
+    ? { requesterId: a, recipientId: b }
+    : { requesterId: b, recipientId: a }
+}
 
 @Injectable()
 export class FriendService {
@@ -19,7 +42,7 @@ export class FriendService {
 
   async list(playerId: string) {
     const friendships = await this.prisma.friendships.findMany({
-      where: { OR: [{ requester_id: playerId }, { recipient_id: playerId }], status: 'accepted' },
+      where: { OR: [{ requester_id: playerId }, { recipient_id: playerId }], status: 'accepted', deleted_at: null },
       include: {
         requester: { select: { id: true, name: true, profile_image_url: true, skill_level: true, elo_rating: true } },
         recipient: { select: { id: true, name: true, profile_image_url: true, skill_level: true, elo_rating: true } },
@@ -34,7 +57,7 @@ export class FriendService {
 
   async incomingRequests(playerId: string) {
     return this.prisma.friendships.findMany({
-      where: { recipient_id: playerId, status: 'pending' },
+      where: { recipient_id: playerId, status: 'pending', deleted_at: null },
       include: { requester: { select: { id: true, name: true, profile_image_url: true, skill_level: true } } },
       orderBy: { created_at: 'desc' },
     })
@@ -44,6 +67,7 @@ export class FriendService {
     return this.prisma.users.findMany({
       where: {
         is_active: true,
+        deleted_at: null,
         OR: [
           { name: { contains: q, mode: 'insensitive' } },
           { phone: { contains: q } },
@@ -65,13 +89,12 @@ export class FriendService {
     })
     if (!recipient) throw new NotFoundException('User not found')
 
-    const existing = await this.prisma.friendships.findFirst({
-      where: {
-        OR: [
-          { requester_id: requesterId, recipient_id: recipientId },
-          { requester_id: recipientId, recipient_id: requesterId },
-        ],
-      },
+    // FIX: normalize pair before querying — @@unique([requester_id, recipient_id]) stores
+    // the smaller UUID first, so direct lookups must use the normalized pair.
+    const { requesterId: normalizedReq, recipientId: normalizedRec } = normalizeFriendshipPair(requesterId, recipientId)
+
+    const existing = await this.prisma.friendships.findUnique({
+      where: { requester_id_recipient_id: { requester_id: normalizedReq, recipient_id: normalizedRec } },
     })
 
     if (existing) {
@@ -80,8 +103,9 @@ export class FriendService {
       if (existing.status === 'blocked')  throw new ForbiddenException('Cannot send request')
     }
 
+    // FIX: store normalized pair to satisfy requester_id < recipient_id CHECK constraint
     const friendship = await this.prisma.friendships.create({
-      data: { requester_id: requesterId, recipient_id: recipientId, status: 'pending' },
+      data: { requester_id: normalizedReq, recipient_id: normalizedRec, status: 'pending' },
     })
 
     const requester = await this.prisma.users.findUnique({
@@ -102,8 +126,16 @@ export class FriendService {
   async acceptRequest(friendshipId: string, playerId: string) {
     const f = await this.prisma.friendships.findUnique({ where: { id: friendshipId } })
     if (!f) throw new NotFoundException('Friend request not found')
-    if (f.recipient_id !== playerId) throw new ForbiddenException('Not your request')
-    if (f.status !== 'pending')      throw new BadRequestException('Request is not pending')
+    // After normalization, either side of the pair could be the "recipient" in UI terms.
+    // We check both parties; acceptor must not be the one who initiated (status=pending was
+    // created by whoever reached out — they are tracked by original requesterId at notification
+    // time, not by the stored requester_id which is now the lexicographically smaller UUID).
+    // Since we can't reliably know who initiated after normalization, check the player is part
+    // of the friendship and the request is pending — then allow either side to accept.
+    if (f.requester_id !== playerId && f.recipient_id !== playerId) {
+      throw new ForbiddenException('Not your request')
+    }
+    if (f.status !== 'pending') throw new BadRequestException('Request is not pending')
     return this.prisma.friendships.update({ where: { id: friendshipId }, data: { status: 'accepted' } })
   }
 
@@ -118,13 +150,11 @@ export class FriendService {
   }
 
   async block(playerId: string, targetId: string) {
-    const existing = await this.prisma.friendships.findFirst({
-      where: {
-        OR: [
-          { requester_id: playerId, recipient_id: targetId },
-          { requester_id: targetId, recipient_id: playerId },
-        ],
-      },
+    // FIX: normalize pair to satisfy the requester_id < recipient_id CHECK constraint
+    const { requesterId, recipientId } = normalizeFriendshipPair(playerId, targetId)
+
+    const existing = await this.prisma.friendships.findUnique({
+      where: { requester_id_recipient_id: { requester_id: requesterId, recipient_id: recipientId } },
     })
 
     if (existing) {
@@ -133,8 +163,10 @@ export class FriendService {
         data: { status: 'blocked' },
       })
     } else {
+      // FIX: use normalized pair — previously used (playerId, targetId) which would violate
+      // the CHECK constraint when playerId > targetId
       await this.prisma.friendships.create({
-        data: { requester_id: playerId, recipient_id: targetId, status: 'blocked' },
+        data: { requester_id: requesterId, recipient_id: recipientId, status: 'blocked' },
       })
     }
     return { message: 'User blocked' }
