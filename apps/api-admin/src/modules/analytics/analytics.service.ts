@@ -50,23 +50,44 @@ export class AnalyticsService {
 
   async getVenueSummary(query: DateRangeQuery) {
     const dateFilter = this.buildDateFilter(query)
-    const venues = await this.prisma.venues.findMany({
-      where: { is_active: true },
-      select: {
-        id: true, name: true, is_verified: true, avg_rating: true,
-        owner: { select: { name: true, business_name: true } },
-      },
-      orderBy: { avg_rating: 'desc' },
-      take: 50,
+
+    // PERF: Single groupBy replaces N individual aggregate() calls (was up to 50 DB round-trips)
+    const [venues, revenueByVenue] = await Promise.all([
+      this.prisma.venues.findMany({
+        where: { is_active: true },
+        select: {
+          id: true, name: true, is_verified: true, avg_rating: true,
+          owner: { select: { name: true, business_name: true } },
+        },
+        orderBy: { avg_rating: 'desc' },
+        take: 50,
+      }),
+      this.prisma.bookings.groupBy({
+        by: ['venue_id'],
+        where: { status: { in: ['CONFIRMED', 'COMPLETED'] }, ...dateFilter },
+        _sum:   { total_amount: true },
+        _count: { id: true },
+      }),
+    ])
+
+    // Build a fast O(1) lookup map from the single aggregation result
+    const revenueMap = new Map<string, { bookings: number, totalPaisa: number }>(
+      revenueByVenue.map((r: any) => [
+        r.venue_id,
+        { bookings: r._count.id, totalPaisa: r._sum.total_amount ?? 0 },
+      ]),
+    )
+
+    const data = venues.map((v: any) => {
+      const stats = revenueMap.get(v.id) ?? { bookings: 0, totalPaisa: 0 }
+      return {
+        ...v,
+        bookings:   stats.bookings,
+        revenueNPR: (stats.totalPaisa / 100).toFixed(2),
+      }
     })
-    const withStats = await Promise.all(venues.map(async (v: any) => {
-      const r = await this.prisma.bookings.aggregate({
-        where: { venue_id: v.id, status: { in: ['CONFIRMED', 'COMPLETED'] }, ...dateFilter },
-        _sum: { total_amount: true }, _count: { id: true },
-      })
-      return { ...v, bookings: r._count.id, revenueNPR: ((r._sum.total_amount ?? 0) / 100).toFixed(2) }
-    }))
-    return { data: withStats }
+
+    return { data }
   }
 
   async getRevenue(query: RevenueQuery) {
