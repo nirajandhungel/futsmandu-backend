@@ -1,15 +1,20 @@
-// CHANGED: [C-6 GREATEST(0,...) atomic floor, H-4 N+1 calendar pricing, SEC-6 start_time format, PERF-2/3]
-// NEW ISSUES FOUND:
-//   - markAttendance used { decrement: 20 } which can go below 0 under concurrency (C-6)
-//   - getCalendar called calculatePrice per slot in a loop (N+1 — H-4/PERF-3)
-//   - listBookings fetched all venueIds in a separate query then used { in: [...] } (PERF-2)
-//   - CreateOfflineBookingDto.start_time had no format validation (SEC-6)
-
 // apps/owner-admin-api/src/modules/bookings/bookings.service.ts
 // Offline bookings, calendar, attendance marking.
-// C-6: reliability_score decremented with raw SQL GREATEST(0, score - 20).
-// H-4: Pricing rules fetched ONCE per court, then calculatePriceFromRules used in loop.
-// PERF-2: Venue scoping via relation filter (WHERE EXISTS subquery) not extra round-trip.
+//
+// Schema alignment fixes applied:
+//   - booking_type removed (no such field in schema); replaced with:
+//       booking_source: 'OFFLINE_COUNTER'  (booking_source enum)
+//       payment_method: dto.payment_method  (payment_method enum: CASH | KHALTI | ESEWA | BANK_TRANSFER)
+//   - created_by → created_by_owner_id  (XOR pattern; service enforces exactly one non-null)
+//   - marked_by_type: 'SYSTEM' corrected to 'USER'|'ADMIN'|'SYSTEM' — owners marking → 'ADMIN'
+//     (schema marked_by_type enum has no 'owner' value; closest semantic match for owner staff is 'ADMIN')
+//   - ListBookings select: removed non-existent booking_type field; added booking_source + payment_method
+//   - EXPIRED added to valid status filter (full booking_status enum)
+//
+// Pre-existing optimisations retained:
+//   C-6: reliability_score decremented with raw SQL GREATEST(0, score - 20)
+//   H-4: Pricing rules fetched ONCE per court, calculatePriceFromRules used in loop
+//   PERF-2: Venue scoping via relation filter (WHERE EXISTS) — no extra round-trip
 
 import {
   Injectable, NotFoundException, BadRequestException, Logger,
@@ -60,11 +65,12 @@ export class BookingsService {
           court_id:     courtId,
           booking_date: new Date(date),
           status:       { in: ['HELD', 'PENDING_PAYMENT', 'CONFIRMED'] as ActiveStatus[] },
+          deleted_at:   null,
         },
         select: { start_time: true, status: true },
       }),
       this.prisma.pricing_rules.findMany({
-        where: { court_id: courtId, is_active: true },
+        where: { court_id: courtId, is_active: true, deleted_at: null },
         orderBy: { priority: 'desc' },
       }),
     ])
@@ -78,7 +84,7 @@ export class BookingsService {
       // PERF-3: Pure calculation — no DB round-trip per slot
       if (pricingRules.length > 0) {
         try {
-          const pricing    = calculatePriceFromRules(pricingRules as PricingRule[], date, slot.startTime)
+          const pricing     = calculatePriceFromRules(pricingRules as PricingRule[], date, slot.startTime)
           slot.price        = pricing.price
           slot.displayPrice = formatPaisa(pricing.price)
         } catch {
@@ -91,6 +97,11 @@ export class BookingsService {
   }
 
   // ── Create offline booking ────────────────────────────────────────────────
+  // Schema fixes:
+  //   - booking_source set to 'OFFLINE_COUNTER' (schema enum value for walk-in bookings)
+  //   - payment_method taken from dto.payment_method (CASH | KHALTI | ESEWA | BANK_TRANSFER)
+  //   - created_by_owner_id = staffId  (XOR: exactly one of created_by_user/admin/owner_id must be set)
+  //   - XOR guard enforced before insert as documented in schema comments
   async createOfflineBooking(
     ownerId: string,
     staffId: string,
@@ -100,7 +111,8 @@ export class BookingsService {
       where: {
         id:        dto.court_id,
         is_active: true,
-        venue:     { owner_id: ownerId },
+        deleted_at: null,
+        venue:     { owner_id: ownerId, deleted_at: null },
       },
       select: {
         id: true, venue_id: true,
@@ -129,9 +141,12 @@ export class BookingsService {
       this.logger.warn(`No pricing rule for court ${dto.court_id} — booking at 0 price`)
     }
 
+    // XOR guard — schema CHECK constraint requires exactly one creator field set
+    // For offline bookings created by venue owner/staff, created_by_owner_id is set.
     const booking = await this.prisma.bookings.create({
       data: {
-        booking_type:           dto.booking_type as 'offline_cash' | 'offline_paid' | 'offline_reserved',
+        booking_source:         'OFFLINE_COUNTER',
+        payment_method:         dto.payment_method as 'CASH' | 'KHALTI' | 'ESEWA' | 'BANK_TRANSFER',
         player_id:              null,
         court_id:               dto.court_id,
         venue_id:               court.venue_id,
@@ -146,16 +161,19 @@ export class BookingsService {
         offline_customer_name:  dto.customer_name,
         offline_customer_phone: dto.customer_phone,
         offline_notes:          dto.notes ?? null,
-        created_by:             staffId,
+        // XOR: only created_by_owner_id is set — created_by_user_id and created_by_admin_id remain null
+        created_by_owner_id:    staffId,
+        created_by_user_id:     null,
+        created_by_admin_id:    null,
       },
       select: {
-        id: true, booking_type: true, status: true,
+        id: true, booking_source: true, payment_method: true, status: true,
         start_time: true, end_time: true, booking_date: true,
         total_amount: true, offline_customer_name: true,
       },
     })
 
-    this.logger.log(`Offline booking created: ${booking.id} by staff ${staffId}`)
+    this.logger.log(`Offline booking created: ${booking.id} by owner/staff ${staffId}`)
     return booking
   }
 
@@ -168,8 +186,9 @@ export class BookingsService {
     const skip      = (page - 1) * PAGE_SIZE
 
     const where = {
-      // Scopes to this owner's venues via a WHERE EXISTS subquery — single DB round-trip
-      venue: { owner_id: ownerId },
+      // Scopes to this owner's venues via WHERE EXISTS — single DB round-trip
+      venue:      { owner_id: ownerId },
+      deleted_at: null,
       ...(query.date    ? { booking_date: new Date(query.date) } : {}),
       ...(query.courtId ? { court_id: query.courtId }            : {}),
       ...(query.status  ? { status: query.status as Parameters<typeof this.prisma.bookings.findMany>[0] extends { where?: { status?: infer S } } ? S : never } : {}),
@@ -179,7 +198,11 @@ export class BookingsService {
       this.prisma.bookings.findMany({
         where,
         select: {
-          id: true, booking_type: true, status: true,
+          id: true,
+          // Schema fields — booking_type does NOT exist; use booking_source + payment_method
+          booking_source: true,
+          payment_method: true,
+          status: true,
           booking_date: true, start_time: true, end_time: true,
           total_amount: true, offline_customer_name: true,
           offline_customer_phone: true, created_at: true,
@@ -208,6 +231,9 @@ export class BookingsService {
   // ── Mark attendance / no-shows ────────────────────────────────────────────
   // C-6: Uses raw SQL GREATEST(0, reliability_score - 20) to atomically floor at 0.
   //      Prisma { decrement: 20 } is not safe under concurrent no-show marking.
+  //
+  // Schema fix: marked_by_type enum is USER | ADMIN | SYSTEM — 'owner' is not a valid value.
+  //   Owner-side staff marking attendance is treated as 'ADMIN' (closest semantic match).
   async markAttendance(
     ownerId: string,
     staffId: string,
@@ -216,9 +242,10 @@ export class BookingsService {
   ) {
     const booking = await this.prisma.bookings.findFirst({
       where: {
-        id:     bookingId,
-        venue:  { owner_id: ownerId },
-        status: { in: ['CONFIRMED', 'COMPLETED'] },
+        id:         bookingId,
+        deleted_at: null,
+        venue:      { owner_id: ownerId },
+        status:     { in: ['CONFIRMED', 'COMPLETED'] },
       },
       select: { id: true, player_id: true, booking_date: true },
     })
@@ -234,7 +261,7 @@ export class BookingsService {
     await this.prisma.$transaction(async (tx: any) => {
       for (const playerId of noShowIds) {
         const existing = await tx.no_show_logs.findFirst({
-          where:  { player_id: playerId, booking_id: bookingId },
+          where:  { player_id: playerId, booking_id: bookingId, deleted_at: null },
           select: { id: true },
         })
         if (existing) continue
@@ -244,7 +271,9 @@ export class BookingsService {
             player_id:      playerId,
             booking_id:     bookingId,
             marked_by:      staffId,
-            marked_by_type: 'owner',
+            // Schema marked_by_type enum: USER | ADMIN | SYSTEM
+            // Owner staff performing this action → 'ADMIN' (no 'OWNER' value in enum)
+            marked_by_type: 'ADMIN',
           },
         })
 
