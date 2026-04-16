@@ -1,12 +1,12 @@
 // CHANGED: [H-5 joinMatch TOCTOU race condition, L-5 invite token expiry null check]
-// NEW ISSUES FOUND:
-//   - joinMatch read member count then inserted in separate operations — TOCTOU race (H-5)
-//   - generateInviteLink checked token_expires_at in a way that passes when null (L-5)
-
-// apps/player-api/src/modules/match/match.service.ts
-// H-5: joinMatch wraps member count check + insert in a single $transaction to eliminate
-//      TOCTOU race — without this, concurrent join requests could exceed max_players.
-// L-5: Invite token preview only returns valid (non-null, non-expired) tokens.
+// SCHEMA FIX: [compound unique key removed, slots_available removed]
+//
+// - match_group_id_user_id compound key (@@unique) removed from schema in favour of a
+//   partial unique index (WHERE deleted_at IS NULL). Prisma no longer generates a typed
+//   accessor for it, so all findUnique({ where: { match_group_id_user_id: ... } }) calls
+//   are replaced with findFirst({ where: { ..., deleted_at: null } }).
+// - slots_available column removed from match_groups. Capacity checked by counting
+//   confirmed members inside the transaction instead.
 
 import {
   Injectable, NotFoundException, ForbiddenException,
@@ -33,6 +33,7 @@ export class MatchService {
       where: { id },
       include: {
         members: {
+          where: { deleted_at: null },
           include: {
             user: {
               select: {
@@ -86,16 +87,16 @@ export class MatchService {
       if (!lockedMatch) throw new NotFoundException('Match not found')
       if (!lockedMatch.is_open) throw new ForbiddenException('Match is no longer open')
 
-      // Check if already a member
-      const existing = await tx.match_group_members.findUnique({
-        where: { match_group_id_user_id: { match_group_id: matchId, user_id: playerId } },
+      // FIX: use findFirst with deleted_at filter — @@unique replaced by partial index
+      const existing = await tx.match_group_members.findFirst({
+        where: { match_group_id: matchId, user_id: playerId, deleted_at: null },
         select: { id: true },
       })
       if (existing) throw new ConflictException('Already in match')
 
-      // Count INSIDE the transaction with the row locked
+      // FIX: count confirmed members instead of reading removed slots_available column
       const confirmedCount = await tx.match_group_members.count({
-        where: { match_group_id: matchId, status: 'confirmed' },
+        where: { match_group_id: matchId, status: 'confirmed', deleted_at: null },
       })
       if (confirmedCount >= lockedMatch.max_players) throw new ConflictException('Match is full')
 
@@ -108,6 +109,8 @@ export class MatchService {
           position: (position as 'goalkeeper' | 'defender' | 'midfielder' | 'striker' | null) ?? null,
         },
       })
+
+      // FIX: no slots_available column to update
 
       return { member, autoAccepted: lockedMatch.auto_accept, adminId: lockedMatch.admin_id }
     }).then(async (result: any) => {
@@ -131,8 +134,16 @@ export class MatchService {
     })
     if (!match)                     throw new NotFoundException('Match not found')
     if (match.admin_id !== adminId) throw new ForbiddenException('Only admin can approve')
+
+    // FIX: use findFirst with deleted_at filter
+    const member = await this.prisma.match_group_members.findFirst({
+      where: { match_group_id: matchId, user_id: userId, deleted_at: null },
+      select: { id: true },
+    })
+    if (!member) throw new NotFoundException('Member not found')
+
     return this.prisma.match_group_members.update({
-      where: { match_group_id_user_id: { match_group_id: matchId, user_id: userId } },
+      where: { id: member.id },
       data: { status: 'confirmed' },
     })
   }
@@ -144,8 +155,17 @@ export class MatchService {
     })
     if (!match)                     throw new NotFoundException('Match not found')
     if (match.admin_id !== adminId) throw new ForbiddenException('Only admin can reject')
-    await this.prisma.match_group_members.delete({
-      where: { match_group_id_user_id: { match_group_id: matchId, user_id: userId } },
+
+    // FIX: use findFirst with deleted_at filter; soft-delete instead of hard delete
+    const member = await this.prisma.match_group_members.findFirst({
+      where: { match_group_id: matchId, user_id: userId, deleted_at: null },
+      select: { id: true },
+    })
+    if (!member) throw new NotFoundException('Member not found')
+
+    await this.prisma.match_group_members.update({
+      where: { id: member.id },
+      data: { deleted_at: new Date() },
     })
     return { message: 'Member rejected' }
   }
@@ -159,8 +179,17 @@ export class MatchService {
     if (match.admin_id === playerId) {
       throw new BadRequestException('Admin cannot leave — transfer admin first')
     }
-    await this.prisma.match_group_members.delete({
-      where: { match_group_id_user_id: { match_group_id: matchId, user_id: playerId } },
+
+    // FIX: use findFirst with deleted_at filter; soft-delete
+    const member = await this.prisma.match_group_members.findFirst({
+      where: { match_group_id: matchId, user_id: playerId, deleted_at: null },
+      select: { id: true },
+    })
+    if (!member) throw new NotFoundException('You are not in this match')
+
+    await this.prisma.match_group_members.update({
+      where: { id: member.id },
+      data: { deleted_at: new Date() },
     })
     return { message: 'Left match' }
   }
@@ -173,19 +202,26 @@ export class MatchService {
     if (!match)                     throw new NotFoundException('Match not found')
     if (match.admin_id !== adminId) throw new ForbiddenException('Only admin can set teams')
 
+    // FIX: resolve member records via findFirst then update by id
+    const allUids = [...teams.A, ...teams.B]
+    const memberRecords = await this.prisma.match_group_members.findMany({
+      where: { match_group_id: matchId, user_id: { in: allUids }, deleted_at: null },
+      select: { id: true, user_id: true },
+    })
+const memberMap = new Map(
+  memberRecords.map((m: { id: string; user_id: string }) => [m.user_id, m.id])
+)
     await this.prisma.$transaction([
-      ...teams.A.map(uid =>
-        this.prisma.match_group_members.update({
-          where: { match_group_id_user_id: { match_group_id: matchId, user_id: uid } },
-          data: { team_side: 'A' },
-        }),
-      ),
-      ...teams.B.map(uid =>
-        this.prisma.match_group_members.update({
-          where: { match_group_id_user_id: { match_group_id: matchId, user_id: uid } },
-          data: { team_side: 'B' },
-        }),
-      ),
+      ...teams.A.map(uid => {
+        const id = memberMap.get(uid)
+        if (!id) throw new NotFoundException(`Member ${uid} not found in match`)
+        return this.prisma.match_group_members.update({ where: { id }, data: { team_side: 'A' } })
+      }),
+      ...teams.B.map(uid => {
+        const id = memberMap.get(uid)
+        if (!id) throw new NotFoundException(`Member ${uid} not found in match`)
+        return this.prisma.match_group_members.update({ where: { id }, data: { team_side: 'B' } })
+      }),
     ])
     return { message: 'Teams updated' }
   }
@@ -220,7 +256,6 @@ export class MatchService {
     if (match.admin_id !== adminId) throw new ForbiddenException('Only admin can generate invite links')
 
     // L-5: Both invite_token AND token_expires_at must be non-null and not expired.
-    // Previously: if (match.token_expires_at && ...) would pass when token_expires_at is null.
     if (
       match.invite_token !== null &&
       match.invite_token !== undefined &&
@@ -249,7 +284,8 @@ export class MatchService {
       select: {
         id: true, match_date: true, start_time: true, max_players: true,
         skill_filter: true, token_expires_at: true,
-        members: { where: { status: 'confirmed' }, select: { user_id: true } },
+        // FIX: count confirmed non-deleted members only
+        members: { where: { status: 'confirmed', deleted_at: null }, select: { user_id: true } },
         venue: { select: { name: true, cover_image_url: true, address: true } },
       },
     })
@@ -265,6 +301,7 @@ export class MatchService {
       venue: match.venue,
       date: match.match_date,
       startTime: match.start_time,
+      // FIX: derive slotsLeft from max_players - confirmed member count
       spotsLeft: match.max_players - match.members.length,
       skillFilter: match.skill_filter,
     }
