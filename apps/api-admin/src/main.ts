@@ -97,8 +97,12 @@ async function bootstrap(): Promise<void> {
   // Admin tokens are in HTTP-only cookies — SameSite=Strict handles CSRF
   app.enableCors({
     origin: IS_PROD
-      ? ['https://admin.futsmandu.app']
-      : ['http://localhost:3000', 'http://localhost:3003'],
+  ? ['https://admin.futsmandu.app']
+  : [
+      'http://localhost',
+      'http://localhost:3000',
+      'http://localhost:3003'
+    ],
     credentials: true, // Required for HTTP-only cookie auth
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Admin-Token'],

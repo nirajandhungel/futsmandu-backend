@@ -108,8 +108,12 @@ async function bootstrap(): Promise<void> {
 
   app.enableCors({
     origin: IS_PROD
-      ? ['https://futsmandu.app', 'https://www.futsmandu.app']
-      : true,
+  ? [
+      'https://futsmandu.app',
+      'https://owner.futsmandu.app',
+      'https://player.futsmandu.app'
+    ]
+  : true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   })

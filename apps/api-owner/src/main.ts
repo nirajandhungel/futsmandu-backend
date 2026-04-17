@@ -122,12 +122,12 @@ async function bootstrap(): Promise<void> {
   // In production, Flutter apps typically don't use browser CORS — this is belt-and-suspenders.
   app.enableCors({
     origin: IS_PROD
-      ? [
-        'https://futsmandu.app',
-        'https://owner.futsmandu.app',
-        // Flutter app: typically no browser origin — handle via token auth instead
-      ]
-      : true,
+  ? [
+      'https://futsmandu.app',
+      'https://owner.futsmandu.app',
+      'https://player.futsmandu.app'
+    ]
+  : true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
