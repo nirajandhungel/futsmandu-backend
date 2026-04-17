@@ -453,6 +453,7 @@ model bookings {
   id                     String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   payment_method         payment_method?
   booking_source         booking_source  @default(PLAYER_SELF)
+  booking_name           String?         @db.VarChar(80)
   // FIX 1: player_id is optional (SetNull requires nullable FK)
   player_id              String?         @db.Uuid
   court_id               String          @db.Uuid
@@ -513,6 +514,7 @@ model bookings {
   @@index([deleted_at])
   @@index([payment_method])
   @@index([booking_source])
+  @@index([venue_id, booking_date, start_time])
 }
 
 model payments {

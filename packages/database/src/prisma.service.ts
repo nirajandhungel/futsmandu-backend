@@ -31,10 +31,29 @@ export class PrismaService
 
     // Inject connection pool size from env — Neon pooler requires this in the URL.
     // pgbouncer=true enables statement-level pooling; connect_timeout prevents hangs.
-    const poolSize = config.get<string>('DB_POOL_SIZE') ?? ENV['DB_POOL_SIZE'] ?? '5'
+    const argv = process.argv.join(' ')
+    const isWorkerProcess =
+      argv.includes('workers/main') ||
+      argv.includes('workers\\main') ||
+      argv.includes('start:worker') ||
+      argv.includes('dev:worker')
+
+    const poolSize =
+      config.get<string>('PRISMA_POOL_SIZE') ??
+      (isWorkerProcess
+        ? (config.get<string>('WORKER_DB_POOL_SIZE') ?? ENV['WORKER_DB_POOL_SIZE'])
+        : (config.get<string>('DB_POOL_SIZE') ?? ENV['DB_POOL_SIZE'])) ??
+      '5'
+
     if (!databaseUrl.includes('connection_limit')) {
       const sep = databaseUrl.includes('?') ? '&' : '?'
       databaseUrl += `${sep}connection_limit=${poolSize}&connect_timeout=10&pgbouncer=true`
+    }
+
+    // Poolers + prepared statements can cause extra session churn (e.g. DEALLOCATE ALL).
+    // Keep statement caching disabled unless explicitly configured.
+    if (!databaseUrl.includes('statement_cache_size=')) {
+      databaseUrl += `&statement_cache_size=0`
     }
 
     const nodeEnv = config.get<string>('NODE_ENV') ?? ENV['NODE_ENV']
