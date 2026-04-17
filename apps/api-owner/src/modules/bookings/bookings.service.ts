@@ -147,6 +147,7 @@ export class BookingsService {
       data: {
         booking_source:         'OFFLINE_COUNTER',
         payment_method:         dto.payment_method as 'CASH' | 'KHALTI' | 'ESEWA' | 'BANK_TRANSFER',
+        booking_name:           dto.booking_name?.trim() || null,
         player_id:              null,
         court_id:               dto.court_id,
         venue_id:               court.venue_id,
@@ -202,6 +203,7 @@ export class BookingsService {
           // Schema fields — booking_type does NOT exist; use booking_source + payment_method
           booking_source: true,
           payment_method: true,
+          booking_name: true,
           status: true,
           booking_date: true, start_time: true, end_time: true,
           total_amount: true, offline_customer_name: true,

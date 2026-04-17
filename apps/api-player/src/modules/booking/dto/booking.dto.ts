@@ -77,6 +77,12 @@ export class HoldSlotDto {
   @IsString()
   @MaxLength(200)
   description?: string
+
+  @ApiPropertyOptional({ maxLength: 80, description: 'Player-defined booking name (e.g. “Nirajan Booking”)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  bookingName?: string
 }
 
 export class CancelBookingDto {

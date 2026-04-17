@@ -112,6 +112,7 @@ export class BookingLifecycleService {
         data: {
           // FIX: schema has no `booking_type` column. Source is PLAYER_SELF for self-serve holds.
           booking_source: 'PLAYER_SELF',
+          booking_name: dto.bookingName?.trim() || null,
           player_id: playerId,
           court_id: dto.courtId,
           venue_id: court.venue_id,
@@ -148,29 +149,11 @@ export class BookingLifecycleService {
     if (booking.status !== 'PENDING_PAYMENT') throw new ConflictException(`Booking is ${booking.status}`)
     if (verified.amount !== booking.total_amount) throw new ConflictException('Payment amount does not match booking')
 
-    const adminFeePct = await this.payoutService.getAdminFeePct()
-    const split = this.payoutService.calculateSplit(verified.amount, adminFeePct)
-
     const result = await this.prisma.$transaction(async (tx: any) => {
       await tx.payments.update({
         where: { booking_id: bookingId },
         data: { status: 'SUCCESS', gateway_tx_id: verified.txId, gateway_response: verified.raw as any, completed_at: new Date() },
       })
-
-      if (booking.payment?.id && booking.venue?.owner?.id) {
-        const payoutCreate = this.payoutService.buildPayoutCreateOp({
-          paymentId: booking.payment.id,
-          bookingId,
-          ownerId: booking.venue.owner.id,
-          venueId: booking.venue_id,
-          ownerEsewaId: booking.venue.owner.esewa_id ?? '',
-          totalPaisa: verified.amount,
-          adminFee: split.adminFee,
-          ownerAmount: split.ownerAmount,
-          adminFeePct,
-        })
-        await tx.owner_payouts.create(payoutCreate)
-      }
 
       const confirmed = await tx.bookings.update({
         where: { id: bookingId, status: 'PENDING_PAYMENT' },
@@ -216,14 +199,6 @@ export class BookingLifecycleService {
     await this.notifQueue.add('booking-confirmed', { type: 'BOOKING_CONFIRMED', userId: booking.player_id, data: { bookingId } }, { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: 100, removeOnFail: 200 })
     await this.emailQueue.add('booking-confirmation', { type: 'booking-confirmation', to: player?.email ?? '', name: player?.name ?? '', data: { bookingId } }, { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: 100, removeOnFail: 200 })
     await this.analyticsQueue.add('booking-event', { type: 'confirmed', bookingId }, { attempts: 2, backoff: { type: 'exponential', delay: 3000 }, removeOnComplete: 50, removeOnFail: 100 })
-
-    if (booking.payment?.id) {
-      const payout = await this.prisma.owner_payouts.findUnique({
-        where: { payment_id: booking.payment.id },
-        select: { id: true },
-      })
-      if (payout) await this.payoutService.enqueuePayoutJob(payout.id)
-    }
 
     return result
   }

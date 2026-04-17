@@ -49,6 +49,13 @@ export class CreateOfflineBookingDto {
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
   @IsString() @MaxLength(300)
   notes?: string
+
+  @ApiPropertyOptional({ maxLength: 80, description: 'Booking name shown to staff (e.g. “Nirajan Booking”)' })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MaxLength(80)
+  booking_name?: string
 }
 
 export class ListBookingsQueryDto {
