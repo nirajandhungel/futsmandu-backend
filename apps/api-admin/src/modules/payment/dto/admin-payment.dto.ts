@@ -13,6 +13,12 @@ export class ResolvePayoutDto {
   note!: string
 }
 
+export class ProcessPayoutForBookingDto {
+  @ApiProperty({ description: 'Booking ID to pay out (only allowed after booking start time)' })
+  @IsUUID('4')
+  bookingId!: string
+}
+
 export class UpdatePlatformConfigDto {
   @ApiProperty()
   @IsString()

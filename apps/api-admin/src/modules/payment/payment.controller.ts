@@ -4,7 +4,7 @@ import { AdminPaymentService } from './payment.service.js'
 import { AdminJwtGuard } from '../../common/guards/jwt.guard.js'
 import { Roles, RolesGuard } from '../../common/guards/roles.guard.js'
 import { CurrentAdmin } from '../../common/decorators/user.decorator.js'
-import { ListPayoutsQueryDto, ResolvePayoutDto, RetryPayoutDto, UpdatePlatformConfigDto } from './dto/admin-payment.dto.js'
+import { ListPayoutsQueryDto, ProcessPayoutForBookingDto, ResolvePayoutDto, RetryPayoutDto, UpdatePlatformConfigDto } from './dto/admin-payment.dto.js'
 
 @ApiTags('Admin - Payments')
 @ApiBearerAuth('Admin-JWT')
@@ -44,6 +44,13 @@ export class AdminPaymentController {
   @ApiOperation({ summary: 'Manual payout resolution' })
   resolve(@Param('id') id: string, @CurrentAdmin() admin: { id: string }, @Body() dto: ResolvePayoutDto) {
     return this.adminPayment.resolveManually(id, admin.id, dto.note)
+  }
+
+  @Post('payouts/process')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Process payout for a booking (admin-triggered, only after booking start)' })
+  processPayout(@CurrentAdmin() admin: { id: string }, @Body() dto: ProcessPayoutForBookingDto) {
+    return this.adminPayment.processPayoutForBooking(dto.bookingId, admin.id)
   }
 
   @Get('config')

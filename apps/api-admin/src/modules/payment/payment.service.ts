@@ -58,6 +58,74 @@ export class AdminPaymentService {
     return { message: 'Payout re-queued', payoutId: id }
   }
 
+  /**
+   * Admin-triggered payout: only allowed once booking start time has arrived.
+   * Creates payout record if missing (unique payment_id), then enqueues the payout job.
+   */
+  async processPayoutForBooking(bookingId: string, adminId: string) {
+    const booking = await this.prisma.bookings.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        booking_date: true,
+        start_time: true,
+        status: true,
+        venue_id: true,
+        payment: { select: { id: true, status: true, amount: true } },
+        venue: { select: { owner: { select: { id: true, esewa_id: true, esewa_verified: true } } } },
+      },
+    })
+    if (!booking) throw new NotFoundException('Booking not found')
+    if (!booking.payment?.id) throw new BadRequestException('No payment found for this booking')
+    if (booking.payment.status !== 'SUCCESS') throw new BadRequestException('Payment is not successful')
+    if (!booking.venue?.owner?.id) throw new BadRequestException('Booking has no owner')
+    if (!booking.venue.owner.esewa_verified) throw new BadRequestException('Owner eSewa is not verified')
+
+    // Enforce "only after booking start time"
+    const now = new Date()
+    const pad2 = (n: number) => String(n).padStart(2, '0')
+    const todayStr = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
+    const nowTime = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`
+    const bookingDateStr = `${booking.booking_date.getFullYear()}-${pad2(booking.booking_date.getMonth() + 1)}-${pad2(booking.booking_date.getDate())}`
+
+    if (bookingDateStr > todayStr || (bookingDateStr === todayStr && booking.start_time > nowTime)) {
+      throw new BadRequestException('Payout can be processed only after booking start time')
+    }
+
+    // If payout already exists, just enqueue (idempotent)
+    const existing = await this.prisma.owner_payouts.findUnique({
+      where: { payment_id: booking.payment.id },
+      select: { id: true, status: true },
+    })
+    if (existing) {
+      if (existing.status === 'SUCCESS' || existing.status === 'MANUALLY_RESOLVED') {
+        throw new BadRequestException('Payout already completed')
+      }
+      await this.payoutService.enqueuePayoutJob(existing.id)
+      return { message: 'Payout queued', payoutId: existing.id }
+    }
+
+    const adminFeePct = await this.payoutService.getAdminFeePct()
+    const split = this.payoutService.calculateSplit(booking.payment.amount, adminFeePct)
+
+    const created = await this.prisma.owner_payouts.create(
+      this.payoutService.buildPayoutCreateOp({
+        paymentId: booking.payment.id,
+        bookingId: booking.id,
+        ownerId: booking.venue.owner.id,
+        venueId: booking.venue_id,
+        ownerEsewaId: booking.venue.owner.esewa_id ?? '',
+        totalPaisa: booking.payment.amount,
+        adminFee: split.adminFee,
+        ownerAmount: split.ownerAmount,
+        adminFeePct,
+      }),
+    )
+
+    await this.payoutService.enqueuePayoutJob(created.id)
+    return { message: 'Payout created and queued', payoutId: created.id }
+  }
+
   async resolveManually(id: string, adminId: string, note: string) {
     const payout = await this.prisma.owner_payouts.findUnique({ where: { id } })
     if (!payout) throw new NotFoundException('Payout not found')
