@@ -21,6 +21,17 @@ import { ENV } from '@futsmandu/utils'
 // Cost-10 hash of 'dummy_password' — keeps timing consistent for non-existent accounts
 const DUMMY_HASH = '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'
 
+function conflictFieldFromPrismaUniqueError(err: unknown): 'email' | 'phone' | null {
+  const anyErr = err as any
+  if (anyErr?.code !== 'P2002') return null
+  const target = anyErr?.meta?.target
+  const fields: string[] =
+    Array.isArray(target) ? target : typeof target === 'string' ? [target] : []
+  if (fields.includes('email')) return 'email'
+  if (fields.includes('phone')) return 'phone'
+  return null
+}
+
 @Injectable()
 export class OwnerAuthService {
   private readonly logger = new Logger(OwnerAuthService.name)
@@ -45,37 +56,64 @@ export class OwnerAuthService {
 
   // ── Register ──────────────────────────────────────────────────────────────
   async register(dto: RegisterOwnerDto) {
-    // Select email+phone so we can tell the user exactly which field conflicts
-    const existing = await this.prisma.owners.findFirst({
-      where: { OR: [{ email: dto.email }, { phone: dto.phone }] },
-      select: { email: true, phone: true },
-    })
-
-    if (existing) {
-      const field = existing.email === dto.email ? 'email' : 'phone'
-      throw new ConflictException(`An account with this ${field} already exists`)
-    }
-
     const password_hash = await bcrypt.hash(dto.password, 10)
-    const owner = await this.prisma.owners.create({
-      data: {
-        name:          dto.name,
-        email:         dto.email,
-        phone:         dto.phone,
-        password_hash,
-        business_name: dto.business_name,
-        is_verified:   false, // Not verified until OTP is submitted
-      },
-      select: {
-        id: true, name: true, email: true,
-        phone: true, business_name: true, created_at: true, is_verified: true,
-      },
+
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      let owner: {
+        id: string
+        name: string
+        email: string
+        phone: string
+        business_name: string | null
+        created_at: Date
+        is_verified: boolean
+      }
+
+      try {
+        owner = await tx.owners.create({
+          data: {
+            name: dto.name,
+            email: dto.email,
+            phone: dto.phone,
+            password_hash,
+            business_name: dto.business_name,
+            is_verified: false,
+          },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            business_name: true,
+            created_at: true,
+            is_verified: true,
+          },
+        })
+      } catch (err) {
+        const field = conflictFieldFromPrismaUniqueError(err)
+        if (field) throw new ConflictException(`An account with this ${field} already exists`)
+        throw err
+      }
+
+      const otp = await this.otpService.createOtpRecord(
+        tx,
+        owner.id,
+        'owner',
+        owner.email,
+      )
+
+      return { owner, otp }
     })
 
-    // Generate and send OTP immediately after registration
-    await this.otpService.generateOtp(owner.id, 'owner', owner.email)
+    // Enqueue OTP email out of transaction — never block the request.
+    this.otpService.enqueueOtpEmail({
+      userId: result.owner.id,
+      userType: 'owner',
+      email: result.owner.email,
+      otp: result.otp.otp,
+    })
 
-    return owner
+    return result.owner
   }
 
   // ── Login ─────────────────────────────────────────────────────────────────

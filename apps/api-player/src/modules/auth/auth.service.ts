@@ -7,6 +7,7 @@ import { InjectQueue } from '@nestjs/bullmq'
 import { Queue } from 'bullmq'
 import  bcrypt from 'bcryptjs'
 import { PrismaService } from '@futsmandu/database'
+import type { Prisma } from '@futsmandu/database'
 import type { JwtPayload } from '@futsmandu/types'
 import type { RegisterDto, LoginDto } from './dto/auth.dto.js'
 import { OtpService } from '@futsmandu/auth'
@@ -14,6 +15,18 @@ import { ENV } from '@futsmandu/utils'
 
 // Cost-10 hash of 'dummy_password' — keeps timing consistent for non-existent accounts
 const DUMMY_HASH = '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'
+
+function conflictFieldFromPrismaUniqueError(err: unknown): 'email' | 'phone' | null {
+  const anyErr = err as any
+  // PrismaClientKnownRequestError (P2002)
+  if (anyErr?.code !== 'P2002') return null
+  const target = anyErr?.meta?.target
+  const fields: string[] =
+    Array.isArray(target) ? target : typeof target === 'string' ? [target] : []
+  if (fields.includes('email')) return 'email'
+  if (fields.includes('phone')) return 'phone'
+  return null
+}
 
 @Injectable()
 export class AuthService {
@@ -29,34 +42,48 @@ export class AuthService {
   // ── Register ──────────────────────────────────────────────────────────────
   // Updated to NOT auto-verify; OTP required before login
   async register(dto: RegisterDto) {
-    // Select email+phone so we can tell the user exactly which field conflicts
-    const existing = await this.prisma.users.findFirst({
-      where: { OR: [{ email: dto.email }, { phone: dto.phone }] },
-      select: { email: true, phone: true },
-    })
-
-    if (existing) {
-      const field = existing.email === dto.email ? 'email' : 'phone'
-      throw new ConflictException(`An account with this ${field} already exists`)
-    }
-
     const password_hash = await bcrypt.hash(dto.password, 10)
 
-    const user = await this.prisma.users.create({
-      data: {
-        name: dto.name,
-        email: dto.email,
-        phone: dto.phone,
-        password_hash,
-        is_verified: false, // Not verified until OTP is submitted
-      },
-      select: { id: true, name: true, email: true, phone: true, created_at: true, is_verified: true },
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      let user: {
+        id: string
+        name: string
+        email: string
+        phone: string
+        created_at: Date
+        is_verified: boolean
+      }
+
+      try {
+        user = await tx.users.create({
+          data: {
+            name: dto.name,
+            email: dto.email,
+            phone: dto.phone,
+            password_hash,
+            is_verified: false,
+          },
+          select: { id: true, name: true, email: true, phone: true, created_at: true, is_verified: true },
+        })
+      } catch (err) {
+        const field = conflictFieldFromPrismaUniqueError(err)
+        if (field) throw new ConflictException(`An account with this ${field} already exists`)
+        throw err
+      }
+
+      const otp = await this.otpService.createOtpRecord(tx, user.id, 'player', user.email)
+      return { user, otp }
     })
 
-    // Generate and send OTP immediately after registration
-    await this.otpService.generateOtp(user.id, 'player', user.email)
+    // Enqueue OTP email out of transaction — never block the request.
+    this.otpService.enqueueOtpEmail({
+      userId: result.user.id,
+      userType: 'player',
+      email: result.user.email,
+      otp: result.otp.otp,
+    })
 
-    return user
+    return result.user
   }
 // Updated: Check is_verified before issuing tokens
   async login(dto: LoginDto) {

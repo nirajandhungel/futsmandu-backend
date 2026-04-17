@@ -11,6 +11,7 @@
 import { Injectable, BadRequestException, Logger, Inject, Optional } from '@nestjs/common'
 import type { Queue } from 'bullmq'
 import { PrismaService } from '@futsmandu/database'
+import type { Prisma } from '@futsmandu/database'
 import { ENV } from '@futsmandu/utils'
 
 // ── Injection token ────────────────────────────────────────────────────────
@@ -56,6 +57,70 @@ export class OtpService {
     this.otpLength        = ENV.OTP_LENGTH
   }
 
+  /**
+   * DB-only OTP creation (no queue I/O).
+   * Use this in request transactions to avoid extra BEGIN/COMMIT overhead.
+   */
+  async createOtpRecord(
+    db: Prisma.TransactionClient | PrismaService,
+    userId: string,
+    userType: 'player' | 'owner' | 'admin',
+    email: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<{ otp_id: string; expires_at: Date; otp: string }> {
+    const userIdField = this.userIdField(userType)
+    const otp = this.generateRandomOtp()
+    const dbUserType = userType === 'player' ? 'USER' : userType === 'owner' ? 'OWNER' : 'ADMIN'
+    const expires_at = new Date(Date.now() + this.otpExpiryMinutes * 60 * 1_000)
+
+    // Delete + create. If this runs inside a larger $transaction(), it becomes part of the same BEGIN/COMMIT.
+    await db.email_verification_otps.deleteMany({
+      where: { verified_at: null, [userIdField]: userId },
+    })
+
+    const created = await db.email_verification_otps.create({
+      data: {
+        user_type: dbUserType,
+        [userIdField]: userId,
+        email,
+        otp,
+        ip_address: ipAddress,
+        user_agent: userAgent,
+        expires_at,
+        max_attempts: this.otpMaxAttempts,
+      },
+      select: { id: true, expires_at: true },
+    })
+
+    return { otp_id: created.id, expires_at: created.expires_at, otp }
+  }
+
+  /**
+   * Queue-only (fire-and-forget) — keeps request path fast if Redis is slow.
+   */
+  enqueueOtpEmail(params: {
+    userId: string
+    userType: 'player' | 'owner' | 'admin'
+    email: string
+    otp: string
+  }): void {
+    if (!this.emailQueue) {
+      this.logger.warn(`No OTP_EMAIL_QUEUE injected — email skipped for ${params.userType} ${params.userId}`)
+      return
+    }
+
+    void this.emailQueue
+      .add(
+        'otp-verification',
+        { type: 'otp-verification', to: params.email, data: { otp: params.otp, userType: params.userType } },
+        { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 50, removeOnFail: 100 },
+      )
+      .catch((err: unknown) =>
+        this.logger.error(`Failed to enqueue OTP email for ${params.userType} ${params.userId}`, err),
+      )
+  }
+
   // ── Generate OTP ──────────────────────────────────────────────────────────
   // Fast path: only DB writes + one queue push (~10–30 ms total).
   // Resend is called asynchronously by the worker — never inline here.
@@ -66,53 +131,25 @@ export class OtpService {
     ipAddress?: string,
     userAgent?: string,
   ): Promise<GenerateOtpResult> {
-    const userIdField = this.userIdField(userType)
+    const created = await this.createOtpRecord(
+      this.prisma,
+      userId,
+      userType,
+      email,
+      ipAddress,
+      userAgent,
+    )
 
-    // 1. Delete all previous unverified OTPs for this user (DELETE is faster than UPDATE)
-    await this.prisma.email_verification_otps.deleteMany({
-      where: { verified_at: null, [userIdField]: userId },
-    })
-
-    // 2. Generate OTP + store in DB
-    const otp       = this.generateRandomOtp()
-    const dbUserType = userType === 'player' ? 'USER' : userType === 'owner' ? 'OWNER' : 'ADMIN'
-
-    const otpRecord = await this.prisma.email_verification_otps.create({
-      data: {
-        user_type:    dbUserType,
-        [userIdField]: userId,
-        email,
-        otp,
-        ip_address:   ipAddress,
-        user_agent:   userAgent,
-        expires_at:   new Date(Date.now() + this.otpExpiryMinutes * 60 * 1_000),
-        max_attempts: this.otpMaxAttempts,
-      },
-    })
-
-    // 3. Enqueue email — fire-and-forget (never await the Resend call here)
-    if (this.emailQueue) {
-      await this.emailQueue
-        .add(
-          'otp-verification',
-          { type: 'otp-verification', to: email, data: { otp, userType } },
-          { attempts: 3, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 50, removeOnFail: 100 },
-        )
-        .catch((err: unknown) =>
-          this.logger.error(`Failed to enqueue OTP email for ${userType} ${userId}`, err),
-        )
-    } else {
-      this.logger.warn(`No OTP_EMAIL_QUEUE injected — email skipped for ${userType} ${userId}`)
-    }
+    this.enqueueOtpEmail({ userId, userType, email, otp: created.otp })
 
     if (ENV.NODE_ENV === 'development') {
-      this.logger.debug(`Dev OTP for ${userType} ${userId}: ${otp}`)
+      this.logger.debug(`Dev OTP for ${userType} ${userId}: ${created.otp}`)
     }
 
     return {
-      otp_id:     otpRecord.id,
-      expires_at: otpRecord.expires_at,
-      ...(ENV.NODE_ENV === 'development' ? { otp } : {}),
+      otp_id: created.otp_id,
+      expires_at: created.expires_at,
+      ...(ENV.NODE_ENV === 'development' ? { otp: created.otp } : {}),
     }
   }
 
@@ -131,7 +168,9 @@ export class OtpService {
         verified_at:   null,
         expires_at:    { gt: new Date() },
       },
-      orderBy: { created_at: 'desc' },
+      // generateOtp() deletes all previous unverified OTPs, so at most one row
+      // should match this filter. Avoid ORDER BY to let the best index win.
+      select: { id: true, otp: true, attempts: true, max_attempts: true, expires_at: true },
     })
 
     if (!otpRecord) {
