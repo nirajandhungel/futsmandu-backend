@@ -21,28 +21,74 @@ export class PaymentReconProcessor extends WorkerHost {
   }
 
   async process(): Promise<void> {
-    const pending = await this.prisma.bookings.findMany({
-      where: { status: 'PENDING_PAYMENT', hold_expires_at: { lte: new Date() } },
-      include: { payment: true },
-    })
+    const now = new Date()
+    const batchSize = 200
 
-    for (const booking of pending) {
-      const payment = booking.payment
-      if (!payment?.gateway_tx_id) {
-        await this.bookingService.expireBooking(booking.id)
-        continue
-      }
+    let cursor: { hold_expires_at: Date; id: string } | null = null
+    let totalChecked = 0
 
-      try {
-        // Re-verify with gateway — if paid, confirm; if not, expire
-        if (payment.gateway === 'KHALTI') {
-          await this.paymentService.verifyKhalti(payment.gateway_tx_id, booking.id)
-          this.logger.log(`Recovered KHALTI booking ${booking.id}`)
+    type PendingReconRow = {
+      id: string
+      hold_expires_at: Date | null
+      payment: { gateway: string | null; gateway_tx_id: string | null } | null
+    }
+
+    while (true) {
+      const pending: PendingReconRow[] = (await this.prisma.bookings.findMany({
+        where: {
+          status: 'PENDING_PAYMENT',
+          hold_expires_at: { lte: now },
+          ...(cursor
+            ? {
+                OR: [
+                  { hold_expires_at: { gt: cursor.hold_expires_at } },
+                  { hold_expires_at: cursor.hold_expires_at, id: { gt: cursor.id } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ hold_expires_at: 'asc' }, { id: 'asc' }],
+        take: batchSize,
+        select: {
+          id: true,
+          hold_expires_at: true,
+          payment: {
+            select: { gateway: true, gateway_tx_id: true },
+          },
+        },
+      })) as any
+
+      if (pending.length === 0) break
+      totalChecked += pending.length
+
+      for (const booking of pending) {
+        const payment = booking.payment
+        if (!payment?.gateway_tx_id) {
+          await this.bookingService.expireBooking(booking.id)
+          continue
         }
-      } catch (err) {
-        this.logger.warn(`Recon failed for booking ${booking.id}: ${String(err)}`)
-        await this.bookingService.expireBooking(booking.id)
+
+        try {
+          // Re-verify with gateway — if paid, confirm; if not, expire
+          if (payment.gateway === 'KHALTI') {
+            await this.paymentService.verifyKhalti(payment.gateway_tx_id, booking.id)
+            this.logger.log(`Recovered KHALTI booking ${booking.id}`)
+          }
+        } catch (err) {
+          this.logger.warn(`Recon failed for booking ${booking.id}: ${String(err)}`)
+          await this.bookingService.expireBooking(booking.id)
+        }
       }
+
+      const last: PendingReconRow = pending[pending.length - 1]!
+      if (!last.hold_expires_at) break
+      cursor = { hold_expires_at: last.hold_expires_at, id: last.id }
+
+      if (pending.length < batchSize) break
+    }
+
+    if (totalChecked > 0) {
+      this.logger.log(`Payment recon checked ${totalChecked} stale payments`)
     }
   }
 }

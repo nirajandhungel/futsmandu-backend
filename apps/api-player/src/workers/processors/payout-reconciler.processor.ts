@@ -22,33 +22,10 @@ export class PayoutReconcilerProcessor extends WorkerHost implements OnModuleIni
 
   async onModuleInit(): Promise<void> {
     await this.redis.waitForReady()
-    await this.reconQueue.add('reconcile', {}, {
-      repeat: { every: 10 * 60 * 1000 },
-      jobId: 'payout-reconciler-tick',
-    })
+    // Payouts are admin-triggered only (no automatic retries/scheduling).
   }
 
   async process(_job: Job): Promise<void> {
-    const cutoff = new Date(Date.now() - 5 * 60 * 1000)
-    const pending = await this.prisma.owner_payouts.findMany({
-      where: {
-        status: 'PENDING',
-        created_at: { lte: cutoff },
-        OR: [{ last_attempted_at: null }, { last_attempted_at: { lte: cutoff } }],
-      },
-      select: { id: true },
-      take: 50,
-    })
-
-    for (const payout of pending) {
-      const existingJob = await this.payoutQueue.getJob(`payout:${payout.id}`)
-      if (existingJob) {
-        const state = await existingJob.getState()
-        if (state === 'waiting' || state === 'active' || state === 'delayed') continue
-      }
-      await this.payoutService.enqueuePayoutJob(payout.id)
-    }
-
-    this.logger.log(`Payout reconciler checked ${pending.length} pending payouts`)
+    this.logger.debug('Payout reconciler disabled (admin-triggered payouts)')
   }
 }

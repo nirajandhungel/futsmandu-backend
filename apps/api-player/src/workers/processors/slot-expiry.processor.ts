@@ -23,27 +23,84 @@ export class SlotExpiryProcessor extends WorkerHost {
   }
 
   async process(): Promise<void> {
-    const expired = await this.prisma.bookings.findMany({
-      where: { status: { in: ['HELD', 'PENDING_PAYMENT'] }, hold_expires_at: { lte: new Date() } },
-      select: { id: true, court_id: true, booking_date: true, start_time: true, player_id: true },
-    })
+    const now = new Date()
+    const batchSize = 500
 
-    for (const booking of expired) {
-      await this.bookingService.expireBooking(booking.id)
+    // Batch scan to avoid unbounded reads as bookings grows.
+    // Uses a stable ordering so Postgres can use the right index.
+    let cursor: { hold_expires_at: Date; id: string } | null = null
+    let totalExpired = 0
 
-      if (booking.player_id) {
-        await this.notifQueue
-          .add(
-            'slot-expired',
-            { type: 'SLOT_EXPIRING', userId: booking.player_id, data: { bookingId: booking.id } },
-            { attempts: 2, backoff: { type: 'exponential', delay: 3_000 }, removeOnComplete: 100, removeOnFail: 200 },
-          )
-          .catch(() => null)
-      }
+    type ExpiredBookingRow = {
+      id: string
+      court_id: string
+      booking_date: Date
+      start_time: string
+      player_id: string | null
+      hold_expires_at: Date | null
     }
 
-    if (expired.length > 0) {
-      this.logger.log(`Expired ${expired.length} stale holds`)
+    while (true) {
+      const expired: ExpiredBookingRow[] = (await this.prisma.bookings.findMany({
+        where: {
+          status: { in: ['HELD', 'PENDING_PAYMENT'] },
+          hold_expires_at: { lte: now },
+          ...(cursor
+            ? {
+                OR: [
+                  { hold_expires_at: { gt: cursor.hold_expires_at } },
+                  { hold_expires_at: cursor.hold_expires_at, id: { gt: cursor.id } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ hold_expires_at: 'asc' }, { id: 'asc' }],
+        take: batchSize,
+        select: {
+          id: true,
+          court_id: true,
+          booking_date: true,
+          start_time: true,
+          player_id: true,
+          hold_expires_at: true,
+        },
+      })) as any
+
+      if (expired.length === 0) break
+      totalExpired += expired.length
+
+      for (const booking of expired) {
+        await this.bookingService.expireBooking(booking.id)
+
+        if (booking.player_id) {
+          await this.notifQueue
+            .add(
+              'slot-expired',
+              {
+                type: 'SLOT_EXPIRING',
+                userId: booking.player_id,
+                data: { bookingId: booking.id },
+              },
+              {
+                attempts: 2,
+                backoff: { type: 'exponential', delay: 3_000 },
+                removeOnComplete: 100,
+                removeOnFail: 200,
+              },
+            )
+            .catch(() => null)
+        }
+      }
+
+      const last: ExpiredBookingRow = expired[expired.length - 1]!
+      if (!last.hold_expires_at) break
+      cursor = { hold_expires_at: last.hold_expires_at, id: last.id }
+
+      if (expired.length < batchSize) break
+    }
+
+    if (totalExpired > 0) {
+      this.logger.log(`Expired ${totalExpired} stale holds`)
     }
   }
 }
