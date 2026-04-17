@@ -1,0 +1,272 @@
+# infrastructure/docker-compose.hub.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# FRIEND / CONSUMER compose file — uses pre-built images from Docker Hub.
+# NO source code or build tools needed on the target machine.
+#
+# Prerequisites on friend's machine:
+#   1. Docker installed (docker.com/get-docker)
+#   2. This file + a filled .env (get both from the developer)
+#
+# Usage:
+#   # Set the Docker Hub username that published the images (ask the developer)
+#   export DOCKER_USER=subashdhungel        # or put DOCKER_USER=... in .env
+#
+#   docker compose --env-file .env -f docker-compose.hub.yml pull
+#   docker compose --env-file .env -f docker-compose.hub.yml up -d
+#
+# Access:
+#   http://localhost/api/v1/player/...
+#   http://localhost/api/v1/owner/...
+#   http://localhost/api/v1/admin/...   (IP-restricted — see ADMIN_ALLOWED_IPS)
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  futsmandu-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+services:
+
+  # ── Nginx ─────────────────────────────────────────────────────────────────
+  nginx:
+    image: ${DOCKER_USER:?Set DOCKER_USER to the Docker Hub username}/futsmandu-nginx:${TAG:-latest}
+    container_name: futsmandu-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      player-api:
+        condition: service_healthy
+      owner-api:
+        condition: service_healthy
+      admin-api:
+        condition: service_healthy
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Player API ────────────────────────────────────────────────────────────
+  player-api:
+    image: ${DOCKER_USER}/futsmandu-player-api:${TAG:-latest}
+    environment:
+      NODE_ENV:                   ${NODE_ENV:-production}
+      DATABASE_URL:               ${DATABASE_URL}
+      DIRECT_DATABASE_URL:        ${DIRECT_DATABASE_URL}
+      UPSTASH_REDIS_IOREDIS_URL:  ${UPSTASH_REDIS_IOREDIS_URL}
+      UPSTASH_REDIS_REST_URL:     ${UPSTASH_REDIS_REST_URL}
+      UPSTASH_REDIS_REST_TOKEN:   ${UPSTASH_REDIS_REST_TOKEN}
+      PLAYER_JWT_SECRET:          ${PLAYER_JWT_SECRET}
+      KHALTI_SECRET_KEY:          ${KHALTI_SECRET_KEY:-}
+      ESEWA_SECRET_KEY:           ${ESEWA_SECRET_KEY:-}
+      ESEWA_PRODUCT_CODE:         ${ESEWA_PRODUCT_CODE:-}
+      ESEWA_MERCHANT_CODE:        ${ESEWA_MERCHANT_CODE:-}
+      ESEWA_MERCHANT_SECRET:      ${ESEWA_MERCHANT_SECRET:-}
+      STORAGE_PROVIDER:           ${STORAGE_PROVIDER:-s3}
+      S3_ENDPOINT:                ${S3_ENDPOINT}
+      S3_REGION:                  ${S3_REGION:-auto}
+      S3_ACCESS_KEY:              ${S3_ACCESS_KEY}
+      S3_SECRET_KEY:              ${S3_SECRET_KEY}
+      S3_BUCKET:                  ${S3_BUCKET}
+      S3_FORCE_PATH_STYLE:        ${S3_FORCE_PATH_STYLE:-false}
+      S3_CDN_BASE_URL:            ${S3_CDN_BASE_URL:-}
+      USE_SIGNED_IMAGE_URLS:      ${USE_SIGNED_IMAGE_URLS:-false}
+      SPARROW_SMS_TOKEN:          ${SPARROW_SMS_TOKEN:-}
+      FIREBASE_SERVICE_ACCOUNT:   ${FIREBASE_SERVICE_ACCOUNT:-}
+      RESEND_API_KEY:             ${RESEND_API_KEY:-}
+      SENTRY_DSN:                 ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT:         ${SENTRY_ENVIRONMENT:-production}
+      APP_URL:                    ${APP_URL:-http://localhost}
+      DB_POOL_SIZE:               ${DB_POOL_SIZE:-5}
+      OTP_EXPIRY_MINUTES:         ${OTP_EXPIRY_MINUTES:-10}
+      OTP_MAX_ATTEMPTS:           ${OTP_MAX_ATTEMPTS:-5}
+      OTP_LENGTH:                 ${OTP_LENGTH:-6}
+      PLAYER_API_PORT:            ${PLAYER_API_PORT:-3001}
+    ports:
+      - "3001:3001"   # direct access: http://localhost:3001/api/v1/player/...
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/v1/player/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── Player Worker ─────────────────────────────────────────────────────────
+  player-worker:
+    image: ${DOCKER_USER}/futsmandu-player-worker:${TAG:-latest}
+    environment:
+      NODE_ENV:                   ${NODE_ENV:-production}
+      DATABASE_URL:               ${DATABASE_URL}
+      DIRECT_DATABASE_URL:        ${DIRECT_DATABASE_URL}
+      UPSTASH_REDIS_IOREDIS_URL:  ${UPSTASH_REDIS_IOREDIS_URL}
+      UPSTASH_REDIS_REST_URL:     ${UPSTASH_REDIS_REST_URL}
+      UPSTASH_REDIS_REST_TOKEN:   ${UPSTASH_REDIS_REST_TOKEN}
+      PLAYER_JWT_SECRET:          ${PLAYER_JWT_SECRET}
+      KHALTI_SECRET_KEY:          ${KHALTI_SECRET_KEY:-}
+      ESEWA_SECRET_KEY:           ${ESEWA_SECRET_KEY:-}
+      ESEWA_PRODUCT_CODE:         ${ESEWA_PRODUCT_CODE:-}
+      ESEWA_MERCHANT_CODE:        ${ESEWA_MERCHANT_CODE:-}
+      ESEWA_MERCHANT_SECRET:      ${ESEWA_MERCHANT_SECRET:-}
+      STORAGE_PROVIDER:           ${STORAGE_PROVIDER:-s3}
+      S3_ENDPOINT:                ${S3_ENDPOINT}
+      S3_REGION:                  ${S3_REGION:-auto}
+      S3_ACCESS_KEY:              ${S3_ACCESS_KEY}
+      S3_SECRET_KEY:              ${S3_SECRET_KEY}
+      S3_BUCKET:                  ${S3_BUCKET}
+      S3_FORCE_PATH_STYLE:        ${S3_FORCE_PATH_STYLE:-false}
+      S3_CDN_BASE_URL:            ${S3_CDN_BASE_URL:-}
+      USE_SIGNED_IMAGE_URLS:      ${USE_SIGNED_IMAGE_URLS:-false}
+      SPARROW_SMS_TOKEN:          ${SPARROW_SMS_TOKEN:-}
+      FIREBASE_SERVICE_ACCOUNT:   ${FIREBASE_SERVICE_ACCOUNT:-}
+      RESEND_API_KEY:             ${RESEND_API_KEY:-}
+      SENTRY_DSN:                 ${SENTRY_DSN:-}
+      APP_URL:                    ${APP_URL:-http://localhost}
+      DB_POOL_SIZE:               ${WORKER_DB_POOL_SIZE:-2}
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+
+  # ── Owner API ─────────────────────────────────────────────────────────────
+  owner-api:
+    image: ${DOCKER_USER}/futsmandu-owner-api:${TAG:-latest}
+    container_name: futsmandu-owner-api
+    environment:
+      NODE_ENV:                   ${NODE_ENV:-production}
+      DATABASE_URL:               ${DATABASE_URL}
+      DIRECT_DATABASE_URL:        ${DIRECT_DATABASE_URL}
+      UPSTASH_REDIS_IOREDIS_URL:  ${UPSTASH_REDIS_IOREDIS_URL}
+      UPSTASH_REDIS_REST_URL:     ${UPSTASH_REDIS_REST_URL}
+      UPSTASH_REDIS_REST_TOKEN:   ${UPSTASH_REDIS_REST_TOKEN}
+      OWNER_JWT_SECRET:           ${OWNER_JWT_SECRET}
+      STORAGE_PROVIDER:           ${STORAGE_PROVIDER:-s3}
+      S3_ENDPOINT:                ${S3_ENDPOINT}
+      S3_REGION:                  ${S3_REGION:-auto}
+      S3_ACCESS_KEY:              ${S3_ACCESS_KEY}
+      S3_SECRET_KEY:              ${S3_SECRET_KEY}
+      S3_BUCKET:                  ${S3_BUCKET}
+      S3_FORCE_PATH_STYLE:        ${S3_FORCE_PATH_STYLE:-false}
+      S3_CDN_BASE_URL:            ${S3_CDN_BASE_URL:-}
+      USE_SIGNED_IMAGE_URLS:      ${USE_SIGNED_IMAGE_URLS:-false}
+      SPARROW_SMS_TOKEN:          ${SPARROW_SMS_TOKEN:-}
+      FIREBASE_SERVICE_ACCOUNT:   ${FIREBASE_SERVICE_ACCOUNT:-}
+      RESEND_API_KEY:             ${RESEND_API_KEY:-}
+      SENTRY_DSN:                 ${SENTRY_DSN:-}
+      APP_URL:                    ${APP_URL:-http://localhost}
+      DB_POOL_SIZE:               ${OWNER_DB_POOL_SIZE:-5}
+      OTP_EXPIRY_MINUTES:         ${OTP_EXPIRY_MINUTES:-10}
+      OTP_MAX_ATTEMPTS:           ${OTP_MAX_ATTEMPTS:-5}
+      OTP_LENGTH:                 ${OTP_LENGTH:-6}
+      OWNER_API_PORT:             ${OWNER_API_PORT:-3002}
+    ports:
+      - "3002:3002"   # direct access: http://localhost:3002/api/v1/owner/...
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/api/v1/owner/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── Owner Worker ──────────────────────────────────────────────────────────
+  owner-worker:
+    image: ${DOCKER_USER}/futsmandu-owner-worker:${TAG:-latest}
+    environment:
+      NODE_ENV:                   ${NODE_ENV:-production}
+      DATABASE_URL:               ${DATABASE_URL}
+      DIRECT_DATABASE_URL:        ${DIRECT_DATABASE_URL}
+      UPSTASH_REDIS_IOREDIS_URL:  ${UPSTASH_REDIS_IOREDIS_URL}
+      UPSTASH_REDIS_REST_URL:     ${UPSTASH_REDIS_REST_URL}
+      UPSTASH_REDIS_REST_TOKEN:   ${UPSTASH_REDIS_REST_TOKEN}
+      OWNER_JWT_SECRET:           ${OWNER_JWT_SECRET}
+      STORAGE_PROVIDER:           ${STORAGE_PROVIDER:-s3}
+      S3_ENDPOINT:                ${S3_ENDPOINT}
+      S3_REGION:                  ${S3_REGION:-auto}
+      S3_ACCESS_KEY:              ${S3_ACCESS_KEY}
+      S3_SECRET_KEY:              ${S3_SECRET_KEY}
+      S3_BUCKET:                  ${S3_BUCKET}
+      S3_FORCE_PATH_STYLE:        ${S3_FORCE_PATH_STYLE:-false}
+      S3_CDN_BASE_URL:            ${S3_CDN_BASE_URL:-}
+      USE_SIGNED_IMAGE_URLS:      ${USE_SIGNED_IMAGE_URLS:-false}
+      SPARROW_SMS_TOKEN:          ${SPARROW_SMS_TOKEN:-}
+      FIREBASE_SERVICE_ACCOUNT:   ${FIREBASE_SERVICE_ACCOUNT:-}
+      RESEND_API_KEY:             ${RESEND_API_KEY:-}
+      SENTRY_DSN:                 ${SENTRY_DSN:-}
+      APP_URL:                    ${APP_URL:-http://localhost}
+      DB_POOL_SIZE:               ${WORKER_DB_POOL_SIZE:-2}
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+
+  # ── Admin API ─────────────────────────────────────────────────────────────
+  admin-api:
+    image: ${DOCKER_USER}/futsmandu-admin-api:${TAG:-latest}
+    container_name: futsmandu-admin-api
+    environment:
+      NODE_ENV:                   ${NODE_ENV:-production}
+      DATABASE_URL:               ${DATABASE_URL}
+      DIRECT_DATABASE_URL:        ${DIRECT_DATABASE_URL}
+      UPSTASH_REDIS_IOREDIS_URL:  ${UPSTASH_REDIS_IOREDIS_URL}
+      UPSTASH_REDIS_REST_URL:     ${UPSTASH_REDIS_REST_URL}
+      UPSTASH_REDIS_REST_TOKEN:   ${UPSTASH_REDIS_REST_TOKEN}
+      ADMIN_JWT_SECRET:           ${ADMIN_JWT_SECRET}
+      ADMIN_ALLOWED_IPS:          ${ADMIN_ALLOWED_IPS:-127.0.0.1,172.20.0.0/16}
+      STORAGE_PROVIDER:           ${STORAGE_PROVIDER:-s3}
+      S3_ENDPOINT:                ${S3_ENDPOINT}
+      S3_REGION:                  ${S3_REGION:-auto}
+      S3_ACCESS_KEY:              ${S3_ACCESS_KEY}
+      S3_SECRET_KEY:              ${S3_SECRET_KEY}
+      S3_BUCKET:                  ${S3_BUCKET}
+      S3_FORCE_PATH_STYLE:        ${S3_FORCE_PATH_STYLE:-false}
+      S3_CDN_BASE_URL:            ${S3_CDN_BASE_URL:-}
+      USE_SIGNED_IMAGE_URLS:      ${USE_SIGNED_IMAGE_URLS:-false}
+      RESEND_API_KEY:             ${RESEND_API_KEY:-}
+      SENTRY_DSN:                 ${SENTRY_DSN:-}
+      APP_URL:                    ${APP_URL:-http://localhost}
+      DB_POOL_SIZE:               ${ADMIN_DB_POOL_SIZE:-3}
+      OTP_EXPIRY_MINUTES:         ${OTP_EXPIRY_MINUTES:-10}
+      OTP_MAX_ATTEMPTS:           ${OTP_MAX_ATTEMPTS:-5}
+      OTP_LENGTH:                 ${OTP_LENGTH:-6}
+      ADMIN_API_PORT:             ${ADMIN_API_PORT:-3003}
+    ports:
+      - "3003:3003"   # direct access: http://localhost:3003/api/v1/admin/...
+    networks:
+      - futsmandu-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3003/api/v1/admin/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+  # ── Admin Worker ──────────────────────────────────────────────────────────
+  admin-worker:
+    image: ${DOCKER_USER}/futsmandu-admin-worker:${TAG:-latest}
+    environment:
+      NODE_ENV:                   ${NODE_ENV:-production}
+      DATABASE_URL:               ${DATABASE_URL}
+      DIRECT_DATABASE_URL:        ${DIRECT_DATABASE_URL}
+      UPSTASH_REDIS_IOREDIS_URL:  ${UPSTASH_REDIS_IOREDIS_URL}
+      UPSTASH_REDIS_REST_URL:     ${UPSTASH_REDIS_REST_URL}
+      UPSTASH_REDIS_REST_TOKEN:   ${UPSTASH_REDIS_REST_TOKEN}
+      ADMIN_JWT_SECRET:           ${ADMIN_JWT_SECRET}
+      ADMIN_ALLOWED_IPS:          ${ADMIN_ALLOWED_IPS:-127.0.0.1,172.20.0.0/16}
+      RESEND_API_KEY:             ${RESEND_API_KEY:-}
+      SENTRY_DSN:                 ${SENTRY_DSN:-}
+      APP_URL:                    ${APP_URL:-http://localhost}
+      DB_POOL_SIZE:               ${WORKER_DB_POOL_SIZE:-2}
+    networks:
+      - futsmandu-network
+    restart: unless-stopped

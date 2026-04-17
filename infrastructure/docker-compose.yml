@@ -1,23 +1,18 @@
 # infrastructure/docker-compose.yml
-# Futsmandu Backend — Three API Servers + Three Worker Processes + Nginx + Redis
+# Futsmandu Backend — Three API Servers + Three Worker Processes + Nginx
 #
 # Services (ports):
 #   nginx           :80/:443 → reverse proxy
 #   player-api      :3001    → players (Next.js web + React Native)
 #   owner-api       :3002    → venue owners (Flutter mobile)
-#   admin-api       :3003    → admin dashboard (Next.js web, IP-restricted)
+#   admin-api       :3003    → admin dashboard (IP-restricted)
 #   player-worker            → BullMQ: notifications/refunds/slot-expiry/stats/emails/sms
 #   owner-worker             → BullMQ: FCM push/image-processing/emails/sms
 #   admin-worker             → BullMQ: emails/admin-alerts
-#   redis           :6379    → local dev only (use Upstash in production)
 #
 # Prerequisites:
 #   Copy .env.example → .env and fill all values before running.
-#   UPSTASH_REDIS_IOREDIS_URL must be set — no defaults are provided here
-#   to prevent secrets from being embedded in committed files.
-#
-# Scale player-api only:
-#   docker compose up --scale player-api=3
+#   Run from repo root: pnpm docker:build && pnpm docker:up
 
 networks:
   futsmandu-network:
@@ -26,62 +21,76 @@ networks:
       config:
         - subnet: 172.20.0.0/16
 
-
+# ── Shared environment blocks (YAML anchors) ──────────────────────────────────
 
 x-common-env: &common-env
-  NODE_ENV:                  ${NODE_ENV:?NODE_ENV is required}
-  DATABASE_URL:              ${DATABASE_URL:?DATABASE_URL is required}
-  DIRECT_DATABASE_URL:       ${DIRECT_DATABASE_URL:?DIRECT_DATABASE_URL is required}
-  UPSTASH_REDIS_IOREDIS_URL: ${UPSTASH_REDIS_IOREDIS_URL:?UPSTASH_REDIS_IOREDIS_URL is required}
-  SENTRY_DSN:                ${SENTRY_DSN:?SENTRY_DSN is required (set empty if unused)}
-  APP_URL:                   ${APP_URL:?APP_URL is required}
-  DB_POOL_SIZE:              ${DB_POOL_SIZE:?DB_POOL_SIZE is required}
+  NODE_ENV:                    ${NODE_ENV:-production}
+  DATABASE_URL:                ${DATABASE_URL:?DATABASE_URL is required}
+  DIRECT_DATABASE_URL:         ${DIRECT_DATABASE_URL:?DIRECT_DATABASE_URL is required}
+  # BullMQ workers use ioredis (TLS) — must be rediss:// for Upstash
+  UPSTASH_REDIS_IOREDIS_URL:   ${UPSTASH_REDIS_IOREDIS_URL:?UPSTASH_REDIS_IOREDIS_URL is required}
+  # REST-based Redis client (caching, OTP store)
+  UPSTASH_REDIS_REST_URL:      ${UPSTASH_REDIS_REST_URL:?UPSTASH_REDIS_REST_URL is required}
+  UPSTASH_REDIS_REST_TOKEN:    ${UPSTASH_REDIS_REST_TOKEN:?UPSTASH_REDIS_REST_TOKEN is required}
+  SENTRY_DSN:                  ${SENTRY_DSN:-}
+  SENTRY_ENVIRONMENT:          ${SENTRY_ENVIRONMENT:-production}
+  SENTRY_RELEASE:              ${SENTRY_RELEASE:-1.0.0}
+  SENTRY_TRACES_SAMPLE_RATE:   ${SENTRY_TRACES_SAMPLE_RATE:-0.1}
+  APP_URL:                     ${APP_URL:?APP_URL is required}
+  DB_POOL_SIZE:                ${DB_POOL_SIZE:-5}
+  # OTP settings — defaults match .env.example
+  OTP_EXPIRY_MINUTES:          ${OTP_EXPIRY_MINUTES:-10}
+  OTP_MAX_ATTEMPTS:            ${OTP_MAX_ATTEMPTS:-5}
+  OTP_LENGTH:                  ${OTP_LENGTH:-6}
+
+x-storage-env: &storage-env
+  STORAGE_PROVIDER:            ${STORAGE_PROVIDER:-s3}
+  S3_ENDPOINT:                 ${S3_ENDPOINT:?S3_ENDPOINT is required}
+  S3_REGION:                   ${S3_REGION:-auto}
+  S3_ACCESS_KEY:               ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+  S3_SECRET_KEY:               ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
+  S3_BUCKET:                   ${S3_BUCKET:?S3_BUCKET is required}
+  S3_FORCE_PATH_STYLE:         ${S3_FORCE_PATH_STYLE:-false}
+  S3_CDN_BASE_URL:             ${S3_CDN_BASE_URL:-}
+  USE_SIGNED_IMAGE_URLS:       ${USE_SIGNED_IMAGE_URLS:-false}
+
+x-notification-env: &notification-env
+  SPARROW_SMS_TOKEN:           ${SPARROW_SMS_TOKEN:-}
+  FIREBASE_SERVICE_ACCOUNT:    ${FIREBASE_SERVICE_ACCOUNT:-}
+  RESEND_API_KEY:              ${RESEND_API_KEY:-}
+
+x-payment-env: &payment-env
+  KHALTI_SECRET_KEY:           ${KHALTI_SECRET_KEY:-}
+  ESEWA_SECRET_KEY:            ${ESEWA_SECRET_KEY:-}
+  ESEWA_PRODUCT_CODE:          ${ESEWA_PRODUCT_CODE:-}
+  ESEWA_MERCHANT_CODE:         ${ESEWA_MERCHANT_CODE:-}
+  ESEWA_MERCHANT_SECRET:       ${ESEWA_MERCHANT_SECRET:-}
 
 x-player-env: &player-env
-  <<: *common-env
-  PLAYER_JWT_SECRET:        ${PLAYER_JWT_SECRET:?PLAYER_JWT_SECRET is required}
-  KHALTI_SECRET_KEY:        ${KHALTI_SECRET_KEY:?KHALTI_SECRET_KEY is required (set empty if unused)}
-  ESEWA_SECRET_KEY:         ${ESEWA_SECRET_KEY:?ESEWA_SECRET_KEY is required (set empty if unused)}
-  ESEWA_PRODUCT_CODE:       ${ESEWA_PRODUCT_CODE:?ESEWA_PRODUCT_CODE is required (set empty if unused)}
-  CF_ACCOUNT_ID:            ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is required (set empty if unused)}
-  R2_ACCESS_KEY_ID:         ${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID is required (set empty if unused)}
-  R2_SECRET_ACCESS_KEY:     ${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is required (set empty if unused)}
-  R2_BUCKET_NAME:           ${R2_BUCKET_NAME:?R2_BUCKET_NAME is required (set empty if unused)}
-  R2_CDN_BASE_URL:          ${R2_CDN_BASE_URL:?R2_CDN_BASE_URL is required (set empty if unused)}
-  SPARROW_SMS_TOKEN:        ${SPARROW_SMS_TOKEN:?SPARROW_SMS_TOKEN is required (set empty if unused)}
-  FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:?FIREBASE_SERVICE_ACCOUNT is required (set empty if unused)}
-  RESEND_API_KEY:           ${RESEND_API_KEY:?RESEND_API_KEY is required (set empty if unused)}
+  <<: [*common-env, *storage-env, *notification-env, *payment-env]
+  PLAYER_JWT_SECRET: ${PLAYER_JWT_SECRET:?PLAYER_JWT_SECRET is required}
 
 x-owner-env: &owner-env
-  <<: *common-env
-  OWNER_JWT_SECRET:         ${OWNER_JWT_SECRET:?OWNER_JWT_SECRET is required}
-  CF_ACCOUNT_ID:            ${CF_ACCOUNT_ID:?CF_ACCOUNT_ID is required (set empty if unused)}
-  R2_ACCESS_KEY_ID:         ${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID is required (set empty if unused)}
-  R2_SECRET_ACCESS_KEY:     ${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is required (set empty if unused)}
-  R2_BUCKET_NAME:           ${R2_BUCKET_NAME:?R2_BUCKET_NAME is required (set empty if unused)}
-  R2_CDN_BASE_URL:          ${R2_CDN_BASE_URL:?R2_CDN_BASE_URL is required (set empty if unused)}
-  SPARROW_SMS_TOKEN:        ${SPARROW_SMS_TOKEN:?SPARROW_SMS_TOKEN is required (set empty if unused)}
-  FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:?FIREBASE_SERVICE_ACCOUNT is required (set empty if unused)}
-  RESEND_API_KEY:           ${RESEND_API_KEY:?RESEND_API_KEY is required (set empty if unused)}
+  <<: [*common-env, *storage-env, *notification-env]
+  OWNER_JWT_SECRET: ${OWNER_JWT_SECRET:?OWNER_JWT_SECRET is required}
 
 x-admin-env: &admin-env
-  <<: *common-env
-  ADMIN_JWT_SECRET:    ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET is required}
-  ADMIN_ALLOWED_IPS:   ${ADMIN_ALLOWED_IPS:?ADMIN_ALLOWED_IPS is required}
-  RESEND_API_KEY:      ${RESEND_API_KEY:?RESEND_API_KEY is required (set empty if unused)}
-
+  <<: [*common-env, *storage-env]
+  ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET is required}
+  ADMIN_ALLOWED_IPS: ${ADMIN_ALLOWED_IPS:-127.0.0.1,172.20.0.0/16}
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  
 services:
   # ── NGINX ────────────────────────────────────────────────────────────────
+  # Custom image — config is baked in so friends can pull without the repo.
   nginx:
-    image: nginx:1.25-alpine
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/nginx.Dockerfile
     container_name: futsmandu-nginx
     ports:
       - "80:80"
       - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/sites-available/futsmandu-routes.conf:/etc/nginx/sites-available/futsmandu-routes.conf:ro
-      - ./nginx/proxy_params:/etc/nginx/proxy_params:ro
     depends_on:
       player-api:
         condition: service_healthy
@@ -111,7 +120,7 @@ services:
       target: production
     environment:
       <<: *player-env
-      PLAYER_API_PORT: 3001
+      PLAYER_API_PORT: ${PLAYER_API_PORT:-3001}
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -120,7 +129,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 25s
+      start_period: 30s
     deploy:
       resources:
         limits:       { cpus: "1.0", memory: 512M }
@@ -137,7 +146,7 @@ services:
       target: production
     environment:
       <<: *player-env
-      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:?WORKER_DB_POOL_SIZE is required}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-2}
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -159,8 +168,8 @@ services:
     container_name: futsmandu-owner-api
     environment:
       <<: *owner-env
-      OWNER_API_PORT: 3002
-      DB_POOL_SIZE:   ${OWNER_DB_POOL_SIZE:?OWNER_DB_POOL_SIZE is required}
+      OWNER_API_PORT: ${OWNER_API_PORT:-3002}
+      DB_POOL_SIZE:   ${OWNER_DB_POOL_SIZE:-5}
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -187,7 +196,7 @@ services:
       target: production
     environment:
       <<: *owner-env
-      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:?WORKER_DB_POOL_SIZE is required}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-2}
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -209,8 +218,8 @@ services:
     container_name: futsmandu-admin-api
     environment:
       <<: *admin-env
-      ADMIN_API_PORT: 3003
-      DB_POOL_SIZE:   ${ADMIN_DB_POOL_SIZE:?ADMIN_DB_POOL_SIZE is required}
+      ADMIN_API_PORT: ${ADMIN_API_PORT:-3003}
+      DB_POOL_SIZE:   ${ADMIN_DB_POOL_SIZE:-3}
     networks:
       - futsmandu-network
     restart: unless-stopped
@@ -236,7 +245,7 @@ services:
       target: production
     environment:
       <<: *admin-env
-      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:?WORKER_DB_POOL_SIZE is required}
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-2}
     networks:
       - futsmandu-network
     restart: unless-stopped

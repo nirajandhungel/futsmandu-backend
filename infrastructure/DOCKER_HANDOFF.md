@@ -1,214 +1,189 @@
-# Docker Handoff Guide (Frontend Testing)
+# Futsmandu Backend — Docker Handoff Guide
 
-This guide is for sharing ready-to-run backend containers/images with frontend developers.
+Your backend runs as 7 Docker containers. You build images once on your machine,
+push them to Docker Hub, and your friend just pulls + runs — **no Node.js, no
+source code, no build tools needed on their machine**. Exactly like using MinIO
+via Docker.
 
-## What is Dockerized
+---
 
-The stack has 8 services in `infrastructure/docker-compose.yml`:
+## What your friend gets
 
-- `nginx` (reverse proxy, entrypoint on `80/443`)
-- `player-api` (public API, internal `3001`)
-- `owner-api` (owner API, internal `3002`)
-- `admin-api` (admin API, internal `3003`)
-- `player-worker` (BullMQ jobs for player domain)
-- `owner-worker` (BullMQ jobs for owner domain)
-- `admin-worker` (BullMQ jobs for admin domain)
-- `redis` (local/dev helper only; production should use Upstash)
+| Container      | Direct port on their laptop | Via nginx (port 80)         |
+|---------------|----------------------------|-----------------------------|
+| `player-api`   | `localhost:3001`            | `localhost/api/v1/player/…` |
+| `owner-api`    | `localhost:3002`            | `localhost/api/v1/owner/…`  |
+| `admin-api`    | `localhost:3003`            | `localhost/api/v1/admin/…`  |
+| `player-worker`| —                          | background jobs             |
+| `owner-worker` | —                          | background jobs + Sharp     |
+| `admin-worker` | —                          | background jobs             |
+| `nginx`        | `localhost:80`              | reverse proxy               |
 
-## Important Fixes Applied
-
-Infra issues were fixed so containers start correctly:
-
-- Fixed all Docker `CMD` entrypoints to compiled Nest output:
-  - `dist/apps/*/main.js`
-  - `dist/apps/*/workers/main.js`
-- Fixed `player-api` Docker healthcheck path:
-  - from `/health`
-  - to `/api/v1/player/health`
-
-Without these fixes, containers could build but fail at runtime.
-
-## Recommended Runtime for Frontend Team
-
-For frontend integration testing, keep all services (including workers) running.
-
-- They can call via Nginx:
-  - `http://<host>/api/v1/player/...`
-  - `http://<host>/api/v1/owner/...`
-  - `http://<host>/api/v1/admin/...`
-- Or direct API ports if you expose them separately.
-
-## Option A: Share Source + Compose (simplest)
-
-### 1) Prepare environment file
-
-From repo root:
-
+Their setup is identical to how you run MinIO locally:
 ```bash
-cp .env.example .env
-nano .env
+# They run this — done
+docker compose -f docker-compose.hub.yml --env-file .env up -d
 ```
 
-Fill in real values in `.env`. Do not commit `.env` (it is gitignored).
+---
 
-If you want the vars exported in your current shell (useful for debugging / ad-hoc commands):
+## YOUR workflow (one-time setup)
 
+### 1. Create a Docker Hub account
+Sign up at [hub.docker.com](https://hub.docker.com) and note your username.
+
+### 2. Login from terminal
 ```bash
-set -a; source .env; set +a
+docker login
+# Enter Docker Hub username + password
 ```
 
-### 2) Build and run
-
+### 3. Build all images
 ```bash
-npm run docker:up
+# From repo root
+pnpm docker:build
+```
+First build is slow (5–15 min). Subsequent builds use layer cache.
+
+### 4. Tag + push to Docker Hub
+```bash
+DOCKER_USER=yourDockerHubUsername pnpm hub:publish
+# This runs: docker:build → hub:tag → hub:push
+# All 7 images (nginx + 3 APIs + 3 workers) are pushed
 ```
 
-### 3) Verify
-
+Or step by step:
 ```bash
-npm run docker:ps
-npm run docker:logs
-npm run nginx:test
+DOCKER_USER=yourDockerHubUsername pnpm hub:tag    # tag local images
+DOCKER_USER=yourDockerHubUsername pnpm hub:push   # push to hub
 ```
 
-### 4) Stop
+### 5. Send your friend two things
+1. **`infrastructure/docker-compose.hub.yml`** — one file, commit it to git or send directly
+2. **`.env` file** — send securely (not in chat/email plaintext). Use a password manager share or voice call.
 
-```bash
-npm run docker:down
+---
+
+## FRIEND'S workflow (nothing to install except Docker)
+
+### 1. Install Docker
+- Mac/Windows: [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- Linux: `curl -fsSL https://get.docker.com | sh`
+
+### 2. Get the two files from you
+Save them in the same folder, e.g. `~/futsmandu/`:
+```
+~/futsmandu/
+  docker-compose.hub.yml
+  .env
 ```
 
-## Production Runbook (do these in order)
-
-From repo root:
-
-### 0) One-time prerequisites
-
+### 3. Pull and start
 ```bash
-cp .env.example .env
-nano .env
+cd ~/futsmandu
+
+# Set the Docker Hub username (yours — tell your friend this)
+export DOCKER_USER=yourDockerHubUsername
+
+# Pull all images (~1-2 GB total, cached after first pull)
+docker compose --env-file .env -f docker-compose.hub.yml pull
+
+# Start everything
+docker compose --env-file .env -f docker-compose.hub.yml up -d
 ```
 
-Optional export into current shell:
-
+### 4. Verify it's running
 ```bash
-set -a; source .env; set +a
+# Check all containers are healthy
+docker compose --env-file .env -f docker-compose.hub.yml ps
+
+# Quick health checks (all should return {"status":"ok"})
+curl http://localhost:3001/api/v1/player/health
+curl http://localhost:3002/api/v1/owner/health
+curl http://localhost/nginx-health
 ```
 
-### 1) Pull base images
+### 5. Use the APIs
+```
+# Direct (like MinIO on port 9000):
+http://localhost:3001/api/v1/player/...
+http://localhost:3002/api/v1/owner/...
+http://localhost:3003/api/v1/admin/...
 
-```bash
-docker compose --env-file .env -f infrastructure/docker-compose.yml pull
+# Via nginx (all through port 80):
+http://localhost/api/v1/player/...
+http://localhost/api/v1/owner/...
 ```
 
-### 2) Build the app images
-
-Recommended (clean rebuild):
-
+### 6. Stop
 ```bash
-docker compose --env-file .env -f infrastructure/docker-compose.yml build --no-cache
+docker compose --env-file .env -f docker-compose.hub.yml down
 ```
 
-### 3) Start / update the stack
+---
 
+## Updating images (after you change code)
+
+On **your machine**:
 ```bash
-docker compose --env-file .env -f infrastructure/docker-compose.yml up -d
+# Rebuild changed services only (Docker caches unchanged layers)
+pnpm docker:build
+
+# Re-tag and push
+DOCKER_USER=yourDockerHubUsername pnpm hub:publish
+
+# Or push a versioned tag:
+DOCKER_USER=yourDockerHubUsername TAG=v1.1.0 pnpm hub:publish
 ```
 
-### 4) Verify health
-
+On **friend's machine**:
 ```bash
-docker compose --env-file .env -f infrastructure/docker-compose.yml ps
-docker compose --env-file .env -f infrastructure/docker-compose.yml logs -f --tail=200
-docker exec -it futsmandu-nginx nginx -t
+DOCKER_USER=yourDockerHubUsername \
+docker compose --env-file .env -f docker-compose.hub.yml pull
+
+docker compose --env-file .env -f docker-compose.hub.yml up -d
+# Docker automatically restarts only containers whose image changed
 ```
 
-### 5) Reload nginx after config changes (no downtime)
+---
+
+## Useful commands for your friend
 
 ```bash
-docker exec -it futsmandu-nginx nginx -s reload
+# Watch logs for all services
+docker compose --env-file .env -f docker-compose.hub.yml logs -f
+
+# Watch logs for one service
+docker compose --env-file .env -f docker-compose.hub.yml logs -f player-api
+
+# Restart one service
+docker compose --env-file .env -f docker-compose.hub.yml restart owner-api
+
+# Full stop and remove containers
+docker compose --env-file .env -f docker-compose.hub.yml down
+
+# Stop + remove images (full cleanup)
+docker compose --env-file .env -f docker-compose.hub.yml down --rmi all
 ```
 
-### 6) Stop / restart
+---
 
-```bash
-docker compose --env-file .env -f infrastructure/docker-compose.yml down
-docker compose --env-file .env -f infrastructure/docker-compose.yml restart
-```
+## Troubleshooting
 
-## Option B: Share Prebuilt Images (best for frontend handoff)
+| Problem | Fix |
+|---|---|
+| `DOCKER_USER` error on startup | Run `export DOCKER_USER=yourname` before the compose command, or add `DOCKER_USER=yourname` to `.env` |
+| Container exits immediately | Run `docker logs <container-name>` — look for missing env var messages |
+| Port 80 already in use | Stop local nginx/Apache, or change nginx port in `.env`: `NGINX_PORT=8080` |
+| Port 3001/3002/3003 in use | Another app is using that port — stop it or change port in `.env` |
+| Admin API returns 403 | Add friend's IP to `ADMIN_ALLOWED_IPS` in `.env` and restart |
+| Images not found | Make sure you ran `pnpm hub:publish` and `DOCKER_USER` matches your Docker Hub username |
+| `pull` is slow | ~1-2 GB first time — subsequent pulls only download changed layers |
 
-Build images once, then export tarballs and send them.
-
-### 1) Build all images
-
-```bash
-npm run docker:build:retry
-```
-
-### 2) Export images
-
-```bash
-docker save -o futsmandu-images.tar \
-  futsmandu-3-player-api \
-  futsmandu-3-owner-api \
-  futsmandu-3-admin-api \
-  futsmandu-3-player-worker \
-  futsmandu-3-owner-worker \
-  futsmandu-3-admin-worker \
-  nginx:1.25-alpine \
-  redis:7.2-alpine
-```
-
-### 3) Frontend dev machine import
-
-```bash
-docker load -i futsmandu-images.tar
-npm run docker:up
-```
-
-## DB + Prisma Fresh Start (when needed)
-
-If you want a clean DB before handing off:
-
-```bash
-npm run prisma:generate
-npm run prisma:migrate:deploy
-```
-
-For local dev reset flows, use your migration/dev workflow before container startup.
-
-## Health Endpoints
-
-- Player: `http://<host>/api/v1/player/health`
-- Owner: `http://<host>/api/v1/owner/health`
-- Admin: `http://<host>/api/v1/admin/health`
-- Nginx: `http://<host>/nginx-health`
-
-## Frontend Team Quick Commands
-
-```bash
-# start
-npm run docker:up
-
-# watch logs
-npm run docker:logs
-
-# validate nginx config
-npm run nginx:test
-
-# reload nginx config
-npm run nginx:reload
-
-# rebuild after backend changes
-npm run docker:up
-
-# cleanup
-npm run docker:down
-```
+---
 
 ## Notes
 
-- `redis` service in compose is for local/dev fallback; if Upstash is configured, app traffic uses Upstash.
-- `deploy.resources` in compose is mostly for Docker Swarm; local Docker Compose may ignore those limits.
-- Keep `.env` aligned across the team to avoid startup drift.
-- If Docker build fails with `npm ci ... ETIMEDOUT`, it is a network timeout to npm registry during image build. Re-run `npm run docker:build:retry` or use a stable network/VPN.
+- **Database and Redis are external** — Neon (DB) and Upstash (Redis) credentials in `.env` connect to the cloud. Your friend shares the same DB/Redis as you unless you give them separate credentials.
+- **Admin Admin IP restriction** — by default only `127.0.0.1` and Docker network can reach admin. If friend needs admin access, add their IP to `ADMIN_ALLOWED_IPS` in `.env`.
+- **No domain needed** — everything runs on `localhost`. No DNS, no SSL cert needed for local testing.
