@@ -1,54 +1,60 @@
 # infrastructure/docker/worker.Dockerfile
-# BullMQ worker container — same build as player API, different CMD.
+# BullMQ player-worker container — same build as player API, different CMD.
 # Workers are stateless and scale independently of the API containers.
+#
+# Compiled output lands in: apps/api-player/dist/workers/main.js
 
 FROM node:22-alpine AS builder
 
 RUN apk add --no-cache python3 make g++
 
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+
 WORKDIR /app
 
-COPY package*.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY tsconfig.base.json ./
 
-COPY packages/database/package.json  ./packages/database/
-COPY packages/redis/package.json     ./packages/redis/
-COPY packages/auth/package.json      ./packages/auth/
-COPY packages/logger/package.json    ./packages/logger/
-COPY packages/media/package.json     ./packages/media/
-COPY packages/types/package.json     ./packages/types/
-COPY packages/utils/package.json     ./packages/utils/
-COPY apps/player-api/package.json    ./apps/player-api/
+COPY packages/types/package.json            ./packages/types/
+COPY packages/utils/package.json            ./packages/utils/
+COPY packages/logger/package.json           ./packages/logger/
+COPY packages/redis/package.json            ./packages/redis/
+COPY packages/queues/package.json           ./packages/queues/
+COPY packages/database/package.json         ./packages/database/
+COPY packages/media-core/package.json       ./packages/media-core/
+COPY packages/media-storage/package.json    ./packages/media-storage/
+COPY packages/media-processing/package.json ./packages/media-processing/
+COPY packages/media/package.json            ./packages/media/
+COPY packages/auth/package.json             ./packages/auth/
+COPY packages/sentry/package.json           ./packages/sentry/
+COPY packages/esewa-payout/package.json     ./packages/esewa-payout/
+COPY apps/api-player/package.json           ./apps/api-player/
 
-RUN npm ci \
-    --workspace=apps/player-api \
-    --workspace=packages/database \
-    --workspace=packages/redis \
-    --workspace=packages/auth \
-    --workspace=packages/logger \
-    --workspace=packages/media \
-    --workspace=packages/types \
-    --workspace=packages/utils \
-    --include-workspace-root \
-    --frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 COPY packages/database/prisma ./packages/database/prisma/
-RUN npx prisma generate --schema=packages/database/prisma/schema.prisma
+RUN pnpm --filter @futsmandu/database exec prisma generate --schema=prisma/schema.prisma
 
 COPY packages/ ./packages/
-COPY apps/player-api/ ./apps/player-api/
+COPY apps/api-player/ ./apps/api-player/
 
 # No || true — build failures must be loud.
-RUN npm run build --workspace=packages/types
-RUN npm run build --workspace=packages/logger
-RUN npm run build --workspace=packages/media
-RUN npm run build --workspace=packages/redis
-RUN npm run build --workspace=packages/database
-RUN npm run build --workspace=packages/auth
-RUN npm run build --workspace=packages/utils
-RUN npm run build --workspace=apps/player-api
+RUN pnpm --filter @futsmandu/types run build
+RUN pnpm --filter @futsmandu/utils run build
+RUN pnpm --filter @futsmandu/logger run build
+RUN pnpm --filter @futsmandu/redis run build
+RUN pnpm --filter @futsmandu/queues run build
+RUN pnpm --filter @futsmandu/database run build
+RUN pnpm --filter @futsmandu/media-core run build
+RUN pnpm --filter @futsmandu/media-storage run build
+RUN pnpm --filter @futsmandu/media-processing run build
+RUN pnpm --filter @futsmandu/media run build
+RUN pnpm --filter @futsmandu/auth run build
+RUN pnpm --filter @futsmandu/sentry run build
+RUN pnpm --filter @futsmandu/esewa-payout run build
+RUN pnpm --filter @futsmandu/player-api run build
 
-RUN npm prune --production
+RUN pnpm prune --prod
 
 FROM node:22-alpine AS production
 
@@ -56,25 +62,18 @@ RUN addgroup -g 1001 -S nodejs && adduser -S worker -u 1001
 
 WORKDIR /app
 
-# Copy compiled output and production node_modules from builder.
-# packages/ already contains packages/database/generated — no need to copy it twice.
-COPY --from=builder --chown=worker:nodejs /app/dist         ./dist
-COPY --from=builder --chown=worker:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=worker:nodejs /app/packages     ./packages
-COPY --from=builder --chown=worker:nodejs /app/package.json ./
+COPY --from=builder --chown=worker:nodejs /app/node_modules     ./node_modules
+COPY --from=builder --chown=worker:nodejs /app/packages         ./packages
+COPY --from=builder --chown=worker:nodejs /app/apps/api-player  ./apps/api-player
+COPY --from=builder --chown=worker:nodejs /app/package.json     ./
 
-# Copy the health check script.
-# Uses a raw TCP connect to REDIS_URL — no ioredis require() needed, no CWD issues.
-# See scripts/worker-health.mjs for implementation details.
+# Health check script (raw TCP probe to Redis — no ioredis require needed)
 COPY --chown=worker:nodejs scripts/worker-health.mjs ./scripts/worker-health.mjs
 
 USER worker
 
 # Workers have no HTTP port — health is checked by probing Redis reachability.
-# The script is dependency-free (Node built-ins only) so it works regardless of
-# how node_modules are laid out inside the container.
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
   CMD node /app/scripts/worker-health.mjs
 
-# Run the worker process (not the API)
-CMD ["node", "dist/apps/player-api/workers/main.js"]
+CMD ["node", "apps/api-player/dist/workers/main.js"]
