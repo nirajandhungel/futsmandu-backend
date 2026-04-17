@@ -59,7 +59,9 @@ export class PayoutService {
         owner_amount: params.ownerAmount,
         admin_fee_pct: params.adminFeePct,
         status: 'PENDING',
-        trigger: 'AUTO_SPLIT',
+        // Manual admin-triggered payout (we reuse existing enum value to avoid enum drift
+        // when Prisma client isn't regenerated in CI/build).
+        trigger: 'MANUAL_RETRY',
       },
     }
   }
