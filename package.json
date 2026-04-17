@@ -72,6 +72,18 @@
     "docker:build": "docker compose --env-file .env -f infrastructure/docker-compose.yml build",
     "docker:up": "docker compose --env-file .env -f infrastructure/docker-compose.yml up -d",
     "docker:down": "docker compose --env-file .env -f infrastructure/docker-compose.yml down",
+    "docker:logs": "docker compose --env-file .env -f infrastructure/docker-compose.yml logs -f",
+    "docker:ps": "docker compose --env-file .env -f infrastructure/docker-compose.yml ps",
+    "docker:restart": "docker compose --env-file .env -f infrastructure/docker-compose.yml restart",
+
+    "hub:tag": "node scripts/docker-tag.mjs",
+    "hub:push": "node scripts/docker-tag.mjs && node scripts/docker-push.mjs",
+    "hub:publish": "pnpm docker:build && pnpm hub:push",
+
+    "hub:up": "docker compose --env-file .env -f infrastructure/docker-compose.hub.yml up -d",
+    "hub:down": "docker compose --env-file .env -f infrastructure/docker-compose.hub.yml down",
+    "hub:pull": "docker compose --env-file .env -f infrastructure/docker-compose.hub.yml pull",
+
     "seed:admin": "pnpm --filter @futsmandu/admin-api exec dotenv -e ../../.env -- tsx src/scripts/seed-admin.ts",
     "seed:config": "pnpm --filter @futsmandu/admin-api exec dotenv -e ../../.env -- tsx src/scripts/seed-config.ts"
   },

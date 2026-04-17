@@ -8,17 +8,19 @@
     { "path": "./packages/types" },
     { "path": "./packages/utils" },
     { "path": "./packages/logger" },
-    { "path": "./packages/media" },
     { "path": "./packages/redis" },
-    { "path": "./packages/database" },
-    { "path": "./packages/auth" },
     { "path": "./packages/queues" },
+    { "path": "./packages/database" },
     { "path": "./packages/media-core" },
     { "path": "./packages/media-storage" },
     { "path": "./packages/media-processing" },
-    { "path": "./apps/player-api" },
-    { "path": "./apps/owner-api" },
-    { "path": "./apps/admin-api" }
+    { "path": "./packages/media" },
+    { "path": "./packages/auth" },
+    { "path": "./packages/sentry" },
+    { "path": "./packages/esewa-payout" },
+    { "path": "./apps/api-player" },
+    { "path": "./apps/api-owner" },
+    { "path": "./apps/api-admin" }
   ]
 }
 
