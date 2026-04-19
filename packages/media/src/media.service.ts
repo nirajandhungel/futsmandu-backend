@@ -101,9 +101,9 @@ export class MediaService {
 
     const contentType =
       opts.contentType &&
-      (allowedMimes as readonly string[]).includes(
-        opts.contentType,
-      )
+        (allowedMimes as readonly string[]).includes(
+          opts.contentType,
+        )
         ? opts.contentType
         : allowedMimes[0]
 
@@ -131,22 +131,29 @@ export class MediaService {
           expiresIn: 600,
         }),
 
-        this.prisma.media_assets.create({
-          data: {
+        this.prisma.media_assets.upsert({
+          where: { file_key: key },
+          create: {
             file_key: key,
-            asset_type: opts.assetType === 'kyc_document' 
+            asset_type: opts.assetType === 'kyc_document'
               ? (opts.docType === 'business_registration' ? 'OWNER_BUSINESS_REGISTRATION' : opts.docType === 'business_pan' ? 'OWNER_PAN' : 'OWNER_CITIZENSHIP')
               : opts.assetType === 'player_profile' ? 'USER_AVATAR'
-              : opts.assetType === 'owner_profile' ? 'OWNER_AVATAR'
-              : opts.assetType === 'venue_cover' ? 'VENUE_COVER'
-              : opts.assetType === 'venue_gallery' ? 'VENUE_GALLERY'
-              : 'SYSTEM',
+                : opts.assetType === 'owner_profile' ? 'OWNER_AVATAR'
+                  : opts.assetType === 'venue_cover' ? 'VENUE_COVER'
+                    : opts.assetType === 'venue_gallery' ? 'VENUE_GALLERY'
+                      : 'SYSTEM',
             status: 'pending',
             uploader_id: opts.ownerId,
             uploader_type: opts.assetType === 'player_profile' ? 'USER' : 'OWNER',
             metadata: { entityId: opts.entityId, originalAssetType: opts.assetType }
           },
-
+          update: {
+            status: 'pending',
+            uploader_id: opts.ownerId,
+            uploader_type: opts.assetType === 'player_profile' ? 'USER' : 'OWNER',
+            metadata: { entityId: opts.entityId, originalAssetType: opts.assetType },
+            updated_at: new Date(),
+          },
           select: { id: true },
         }),
       ])
@@ -348,9 +355,9 @@ export class MediaService {
 
       cdnUrl: isPublic
         ? this.storage.cdnUrl(
-            this.cdnBase,
-            updatedAsset.file_key,
-          )
+          this.cdnBase,
+          updatedAsset.file_key,
+        )
         : undefined,
 
       webpKey: null,
@@ -411,9 +418,9 @@ export class MediaService {
       thumbUrl:
         asset.thumb_key
           ? this.storage.cdnUrl(
-              this.cdnBase,
-              asset.thumb_key,
-            )
+            this.cdnBase,
+            asset.thumb_key,
+          )
           : undefined,
     }
 
@@ -488,17 +495,17 @@ export class MediaService {
           webpUrl:
             a.webp_key
               ? this.storage.cdnUrl(
-                  this.cdnBase,
-                  a.webp_key,
-                )
+                this.cdnBase,
+                a.webp_key,
+              )
               : undefined,
 
           thumbUrl:
             a.thumb_key
               ? this.storage.cdnUrl(
-                  this.cdnBase,
-                  a.thumb_key,
-                )
+                this.cdnBase,
+                a.thumb_key,
+              )
               : undefined,
 
           uploadedAt:
@@ -546,7 +553,7 @@ export class MediaService {
 
     const uniqueItems: Array<{ docType: string, downloadUrl: string, expiresIn: number, uploadedAt: Date }> = []
     const seen = new Set<string>()
-    
+
     for (const item of items) {
       if (!seen.has(item.docType)) {
         seen.add(item.docType)
