@@ -235,7 +235,7 @@ export class ImageProcessingProcessor extends WorkerHost {
         where: { id: assetId },
         data: {
           status: 'failed',
-          updatedAt: new Date(),
+          updated_at: new Date(),
         },
       }).catch(() => {})
 
@@ -255,11 +255,10 @@ export class ImageProcessingProcessor extends WorkerHost {
     await this.prisma.media_assets.update({
       where: { id: assetId },
       data: {
-        status: 'ready',
-        progress: 100,
-        webpKey: webpKey ?? undefined,
-        thumbKey: thumbKey ?? undefined,
-        updatedAt: new Date(),
+        status: 'completed',
+        webp_key: webpKey ?? undefined,
+        thumb_key: thumbKey ?? undefined,
+        updated_at: new Date(),
       },
     })
   }
