@@ -35,8 +35,29 @@ export class AdminVenuesService {
     private readonly prisma: PrismaService,
     private readonly media: MediaService,
     @InjectQueue('admin-emails') private readonly emailQueue: Queue,
-  ) {}
+  ) { }
 
+  async listAllVenues(page = 1) {
+    const PAGE_SIZE = 20
+    const skip = (page - 1) * PAGE_SIZE
+
+    const [venues, total] = await Promise.all([
+      this.prisma.venues.findMany({
+        select: {
+          id: true, name: true, slug: true, is_verified: true, is_active: true,
+          avg_rating: true, total_reviews: true, amenities: true, created_at: true,
+          owner: { select: { id: true, name: true, email: true } },
+        },
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: PAGE_SIZE,
+      }),
+      this.prisma.venues.count({
+      })
+    ])
+    return { data: venues, meta: { page, total } }
+  }
+  
   async listPendingVenues(page = 1) {
     const PAGE_SIZE = 20
     const skip = (page - 1) * PAGE_SIZE
@@ -64,8 +85,8 @@ export class AdminVenuesService {
       venues.map(async (v: typeof venues[number]) => {
         const cover_image_signed_url = v.cover_image_url
           ? await this.media.getImageUrl(
-              extractKeyFromCdnUrl(v.cover_image_url),
-            ).catch(() => null)
+            extractKeyFromCdnUrl(v.cover_image_url),
+          ).catch(() => null)
           : null
         return { ...v, cover_image_signed_url }
       }),
@@ -109,21 +130,21 @@ export class AdminVenuesService {
     await this.prisma.venues.update({
       where: { id: venueId },
       data: {
-        is_verified:    true,          // ← was: isApproved (does not exist)
-        approved_at:    new Date(),    // ← was: approvedAt
+        is_verified: true,          // ← was: isApproved (does not exist)
+        approved_at: new Date(),    // ← was: approvedAt
         approved_by_id: adminId,       // ← was: approvedById
-        updated_at:     new Date(),
+        updated_at: new Date(),
       },
     })
 
     await this.prisma.owners.update({
       where: { id: venue.owner.id },
       data: {
-        is_kyc_approved:    true,      // ← was: isKycApproved (does not exist)
-        kyc_approved_at:    new Date(), // ← was: kycApprovedAt
+        is_kyc_approved: true,      // ← was: isKycApproved (does not exist)
+        kyc_approved_at: new Date(), // ← was: kycApprovedAt
         kyc_approved_by_id: adminId,   // ← was: kycApprovedById
-        is_verified:        true,
-        updated_at:         new Date(),
+        is_verified: true,
+        updated_at: new Date(),
       },
     })
 
@@ -132,7 +153,7 @@ export class AdminVenuesService {
         'verification-approved',
         {
           type: 'verification-approved',
-          to:   venue.owner.email,
+          to: venue.owner.email,
           name: venue.owner.name,
           data: { venueName: venue.name },
         },
@@ -157,11 +178,11 @@ export class AdminVenuesService {
     await this.prisma.venues.update({
       where: { id: venueId },
       data: {
-        is_verified:    false,   // ← was: isApproved
-        approved_at:    null,    // ← was: approvedAt
+        is_verified: false,   // ← was: isApproved
+        approved_at: null,    // ← was: approvedAt
         approved_by_id: null,    // ← was: approvedById
-        is_active:      false,
-        updated_at:     new Date(),
+        is_active: false,
+        updated_at: new Date(),
       },
     })
 
@@ -173,11 +194,11 @@ export class AdminVenuesService {
       await this.prisma.owners.update({
         where: { id: venue.owner.id },
         data: {
-          is_kyc_approved:    false,  // ← was: isKycApproved
-          kyc_approved_at:    null,   // ← was: kycApprovedAt
+          is_kyc_approved: false,  // ← was: isKycApproved
+          kyc_approved_at: null,   // ← was: kycApprovedAt
           kyc_approved_by_id: null,   // ← was: kycApprovedById
-          is_verified:        false,
-          updated_at:         new Date(),
+          is_verified: false,
+          updated_at: new Date(),
         },
       })
     }
@@ -187,7 +208,7 @@ export class AdminVenuesService {
         'verification-rejected',
         {
           type: 'verification-rejected',
-          to:   venue.owner.email,
+          to: venue.owner.email,
           name: venue.owner.name,
           data: { venueName: venue.name, reason },
         },
@@ -219,10 +240,10 @@ export class AdminVenuesService {
   }>> {
     const images = await this.media.getGallery(venueId)
     return images.map((img: any) => ({
-      asset_id:    img.assetId,
-      cdn_url:     img.cdnUrl,
-      signed_url:  img.signedUrl ?? null,
-      webp_url:    img.webpUrl  ?? null,
+      asset_id: img.assetId,
+      cdn_url: img.cdnUrl,
+      signed_url: img.signedUrl ?? null,
+      webp_url: img.webpUrl ?? null,
       uploaded_at: img.uploadedAt,
     }))
   }
