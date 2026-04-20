@@ -41,7 +41,7 @@ export class AdminVenuesController {
   constructor(
     private readonly adminVenues: AdminVenuesService,
     private readonly media: MediaService,   // ← NEW: for debug endpoint
-  ) {}
+  ) { }
 
   // ── EXISTING endpoints ──────────────────────────────────────────────────────
 
@@ -89,6 +89,12 @@ export class AdminVenuesController {
 
   // ── NEW endpoints ───────────────────────────────────────────────────────────
 
+  @Get('venues')
+  @ApiOperation({ summary: 'List all venues for admin review' })
+  list(@Query('page') page?: number) {
+    return this.adminVenues.listAllVenues(page)
+  }
+
   @Get('venues/:id/gallery')
   @ApiParam({ name: 'id', description: 'Venue UUID' })
   @ApiOperation({
@@ -127,27 +133,27 @@ export class AdminVenuesController {
       return { error: 'Debug endpoint disabled in production' }
     }
 
-    const testKey     = key || 'venues/test-venue-id/cover/test.jpg'
+    const testKey = key || 'venues/test-venue-id/cover/test.jpg'
     const flagEnabled = ENV['USE_SIGNED_IMAGE_URLS'] === 'true'
 
     try {
       const signedUrl = await this.media.getImageUrl(testKey, 300)
       return {
-        ok:           true,
+        ok: true,
         flag_enabled: flagEnabled,
-        key_tested:   testKey,
-        signed_url:   signedUrl,
+        key_tested: testKey,
+        signed_url: signedUrl,
         expires_in_s: 300,
-        expires_at:   new Date(Date.now() + 300_000).toISOString(),
-        bucket:       ENV['S3_BUCKET'] || '(not set)',
-        endpoint:     ENV['S3_ENDPOINT'] || '(not set)',
+        expires_at: new Date(Date.now() + 300_000).toISOString(),
+        bucket: ENV['S3_BUCKET'] || '(not set)',
+        endpoint: ENV['S3_ENDPOINT'] || '(not set)',
       }
     } catch (err: unknown) {
       return {
-        ok:           false,
+        ok: false,
         flag_enabled: flagEnabled,
-        key_tested:   testKey,
-        error:        err instanceof Error ? err.message : String(err),
+        key_tested: testKey,
+        error: err instanceof Error ? err.message : String(err),
       }
     }
   }
