@@ -569,7 +569,7 @@ export class MediaService {
       where: {
         uploader_id: ownerId,
         asset_type: { in: ['OWNER_CITIZENSHIP', 'OWNER_BUSINESS_REGISTRATION', 'OWNER_PAN'] },
-        ...(docType ? { file_key: { contains: `/kyc/${docType}.` } } : {}),
+        ...(docType ? { file_key: { contains: `_${docType}.` } } : {}),
       },
       orderBy: { created_at: 'desc' },
       select: { file_key: true },
