@@ -506,6 +506,7 @@ model bookings {
   @@index([player_id, status, booking_date])
   @@index([player_id, created_at(sort: Desc)])
   @@index([hold_expires_at, status])
+  @@index([status, hold_expires_at])
   @@index([status, booking_date])
   @@index([created_by_user_id, created_at])
   @@index([created_by_admin_id, created_at])
@@ -829,6 +830,7 @@ model media_assets {
   @@index([uploader_id, uploader_type])
   @@index([asset_type])
   @@index([status])
+  @@index([status, updated_at])
   @@index([deleted_at])
 }
 
@@ -974,7 +976,7 @@ model email_verification_otps {
   owner_id     String?       @db.Uuid
   admin_id     String?       @db.Uuid
   email        String
-  otp          String        @db.VarChar(10)
+  otp          String        @db.Text
   ip_address   String?
   user_agent   String?
   attempts     Int           @default(0)

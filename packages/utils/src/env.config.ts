@@ -15,6 +15,8 @@ dotenv.config({ path: path.join(_root, '.env'), override: false })
 export const ENV = {
   NODE_ENV: process.env['NODE_ENV'] ?? 'development',
 
+ BCRYPT_COST: Number(process.env['BCRYPT_COST'] ?? 8),
+ 
   // ── Database ────────────────────────────────────────────────────────────────
   DATABASE_URL:           process.env['DATABASE_URL']          as string,
   DIRECT_DATABASE_URL:    process.env['DIRECT_DATABASE_URL']   as string,
@@ -61,6 +63,7 @@ export const ENV = {
   RESEND_API_KEY:            process.env['RESEND_API_KEY']            as string,
 
   // ── OTP (Email Verification) ───────────────────────────────────────────────
+  OTP_SECRET:         process.env['OTP_SECRET'] as string,
   OTP_EXPIRY_MINUTES: parseInt(process.env['OTP_EXPIRY_MINUTES'] ?? '10', 10),
   OTP_MAX_ATTEMPTS:   parseInt(process.env['OTP_MAX_ATTEMPTS'] ?? '5', 10),
   OTP_LENGTH:         parseInt(process.env['OTP_LENGTH'] ?? '6', 10),
