@@ -1,7 +1,7 @@
 // owner-api/src/modules/venue-management/venue-management.controller.ts
-// UPDATED: Removed POST /:id/images/upload-url and POST /:id/images/confirm.
+// Gallery endpoint removed — use GET /media/venues/:venueId/gallery (MediaController)
+// which includes presigned URLs and a 50-min in-memory cache.
 // All media uploads go through /media/* (media.controller.ts).
-// Kept GET /venues/:id/gallery for querying ready gallery images.
 
 import {
   Controller, Get, Post, Put, Delete, Body, Param, UseGuards,
@@ -57,17 +57,8 @@ export class VenueManagementController {
     return this.venues.createCourt(owner.id, id, dto)
   }
 
-  // Gallery: query ready images (does NOT handle uploads — use POST /media/venues/:venueId/gallery/upload-url)
-  @Get(':id/gallery')
-  @ApiOperation({
-    summary: 'List ready gallery images for a venue',
-    description:
-      'Returns CDN URLs for all gallery images with status = ready. ' +
-      'To upload a new gallery image use POST /media/venues/:venueId/gallery/upload-url.',
-  })
-  listGallery(@CurrentOwner() owner: AuthOwner, @Param('id') id: string) {
-    return this.venues.listGalleryImages(owner.id, id)
-  }
+  // Gallery removed — use GET /media/venues/:venueId/gallery (MediaController)
+  // That endpoint returns presigned signedUrl + thumbUrl with a 50-min in-memory cache.
 }
 
 @ApiTags('Venue Management')
