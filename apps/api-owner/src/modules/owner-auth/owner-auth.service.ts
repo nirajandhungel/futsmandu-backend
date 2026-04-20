@@ -219,7 +219,7 @@ async register(dto: RegisterOwnerDto) {
   private signAccess(sub: string, email: string, role: string): string {
     return this.jwt.sign(
       { sub, email, type: 'access' as const, role },
-      { expiresIn: '15m', secret: ENV['OWNER_JWT_SECRET'] },
+      { expiresIn: '1d', secret: ENV['OWNER_JWT_SECRET'] },
     )
   }
 
