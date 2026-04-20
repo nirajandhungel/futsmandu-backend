@@ -55,66 +55,53 @@ export class OwnerAuthService {
   ) {}
 
   // ── Register ──────────────────────────────────────────────────────────────
-  async register(dto: RegisterOwnerDto) {
-    const password_hash = await bcrypt.hash(dto.password, 10)
+async register(dto: RegisterOwnerDto) {
 
-    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      let owner: {
-        id: string
-        name: string
-        email: string
-        phone: string
-        business_name: string | null
-        created_at: Date
-        is_verified: boolean
-      }
+  // 1. Hash password (async CPU heavy)
+  const password_hash = await bcrypt.hash(dto.password, ENV.BCRYPT_COST)
 
-      try {
-        owner = await tx.owners.create({
-          data: {
-            name: dto.name,
-            email: dto.email,
-            phone: dto.phone,
-            password_hash,
-            business_name: dto.business_name,
-            is_verified: false,
-          },
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
-            business_name: true,
-            created_at: true,
-            is_verified: true,
-          },
-        })
-      } catch (err) {
-        const field = conflictFieldFromPrismaUniqueError(err)
-        if (field) throw new ConflictException(`An account with this ${field} already exists`)
-        throw err
-      }
+  let owner
 
-      const otp = await this.otpService.createOtpRecord(
-        tx,
-        owner.id,
-        'owner',
-        owner.email,
-      )
-
-      return { owner, otp }
+  // 2. Create owner (ONLY DB CALL #1)
+  try {
+    owner = await this.prisma.owners.create({
+      data: {
+        name: dto.name,
+        email: dto.email,
+        phone: dto.phone,
+        password_hash,
+        business_name: dto.business_name,
+        is_verified: false,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        business_name: true,
+        created_at: true,
+        is_verified: true,
+      },
     })
-
-    // Enqueue OTP email out of transaction — never block the request.
-    this.otpService.enqueueOtpEmail({
-      userId: result.owner.id,
-      userType: 'owner',
-      email: result.owner.email,
-      otp: result.otp.otp,
-    })
-
-    return result.owner
+  } catch (err) {
+    const field = conflictFieldFromPrismaUniqueError(err)
+    if (field) {
+      throw new ConflictException(`Account with this ${field} already exists`)
+    }
+    throw err
   }
+
+  // 3. Fire OTP (DB CALL #2 but async safe pattern)
+  // IMPORTANT: DO NOT block registration on OTP creation
+  void this.otpService.generateOtp(
+    owner.id,
+    'owner',
+    owner.email,
+  )
+
+  // 4. Return immediately
+  return owner
+}
 
   // ── Login ─────────────────────────────────────────────────────────────────
   // Updated: Check is_verified before issuing tokens
