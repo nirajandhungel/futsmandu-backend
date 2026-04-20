@@ -108,17 +108,8 @@ export class MediaController {
     return this.media.getAllKycDocUrls(owner.id)
   }
 
-  @Post('kyc/view-url')
-  @ApiOperation({
-    summary: '[DEPRECATED] Get signed URL to view your KYC document',
-    description: 'Deprecated: Use GET /kyc instead. Returns a 10-minute signed GET URL.',
-  })
-  getKycViewUrl(
-    @CurrentOwner() owner: { id: string },
-    @Body('docType') docType?: string,
-  ) {
-    return this.media.getKycDocUrl(owner.id, docType)
-  }
+  // POST /kyc/view-url removed (was [DEPRECATED])
+  // Replacement: GET /media/kyc — returns all docs with 10-min signed URLs in one call.
 
   // ── Profile ───────────────────────────────────────────────────────────────
 
