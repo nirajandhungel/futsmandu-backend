@@ -41,6 +41,11 @@ export interface UploadUrlResult {
   assetId:    string
   uploadUrl:  string
   key:        string
+  /** Client MUST attach these exact headers to their PUT request to avoid SignatureDoesNotMatch */
+  requiredHeaders: {
+    'Content-Type': string
+    'Cache-Control': string
+  }
   /** Public CDN URL for instant optimistic display BEFORE processing completes */
   cdnUrl?:    string
   /** Predicted WebP key (may 404 until processing finishes — use cdnUrl for instant display) */
