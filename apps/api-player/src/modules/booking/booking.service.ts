@@ -1,3 +1,4 @@
+// api-player/src/modules/booking/booking.service.ts
 import { Injectable } from '@nestjs/common'
 import type {
   HoldSlotDto, BookingQueryDto, RequestJoinDto, RespondJoinRequestDto,
