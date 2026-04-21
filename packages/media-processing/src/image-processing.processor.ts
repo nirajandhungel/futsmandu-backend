@@ -71,7 +71,7 @@ const RESIZE_OPTS = {
 // ─────────────────────────────────────────────────────────────
 
 @Processor(QUEUE_IMAGE_PROCESSING, {
-  concurrency: 4, // safe for 512 MB – 1 GB worker container
+  concurrency: 6, // effort:0 WebP uses less CPU — 6 concurrent jobs safe up to 1 GB
 })
 export class ImageProcessingProcessor extends WorkerHost {
   private readonly logger = new Logger(ImageProcessingProcessor.name)
@@ -97,13 +97,6 @@ export class ImageProcessingProcessor extends WorkerHost {
     if (job.name !== 'process-media') return
 
     const { assetId, key, assetType, targetWidth, targetHeight } = job.data
-
-    // PDFs and raw verification docs — mark ready immediately, no image processing needed
-    if (assetType === 'kyc_document' || assetType === 'venue_verification') {
-      await this.markReady(assetId)
-      void this.bustStatusCache(assetId)
-      return
-    }
 
     this.logger.log(`[${assetId}] start  key=${key}`)
 
@@ -148,13 +141,13 @@ export class ImageProcessingProcessor extends WorkerHost {
         (sharp as any)(input)
           .rotate()
           .resize(targetWidth, targetHeight, RESIZE_OPTS)
-          .webp({ quality: 80, effort: 3 })
+          .webp({ quality: 80, effort: 0 })  // effort:0 = fastest encode (~5× faster than effort:3)
           .toBuffer() as Promise<Buffer>,
 
         (sharp as any)(input)
           .rotate()
           .resize(320, 240, RESIZE_OPTS)
-          .webp({ quality: 70, effort: 2 })
+          .webp({ quality: 70, effort: 0 })  // thumb: speed over size
           .toBuffer() as Promise<Buffer>,
       ])
 
