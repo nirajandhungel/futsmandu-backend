@@ -12,7 +12,6 @@ import bcrypt from 'bcryptjs'
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { PrismaService } from '@futsmandu/database'
-import type { Prisma } from '@futsmandu/database'
 import type { JwtPayload } from '@futsmandu/types'
 import type { RegisterOwnerDto, LoginOwnerDto } from './dto/owner-auth.dto.js'
 import { OtpService } from '@futsmandu/auth'
@@ -163,12 +162,14 @@ async register(dto: RegisterOwnerDto) {
     }
   }
 
-  // ── Presigned R2 URL for verification documents ───────────────────────────
+  // ── Presigned R2 URL for verification documents ───────────────────────────────────────
+  // Legacy entry-point kept for backward compat. New uploads must go through
+  // MediaService.requestUploadUrl(‘kyc_document’) → confirmUpload which writes
+  // the owner_kyc_documents link row automatically.
   async getPresignedDocUrl(
     ownerId: string,
     docType: string,
   ): Promise<{ uploadUrl: string; key: string }> {
-    // s3 is a class-level singleton — no dynamic import or new S3Client per call
     const key = `verify/${ownerId}/${docType}.pdf`
     const cmd = new PutObjectCommand({
       Bucket:       ENV['S3_BUCKET'],
@@ -176,30 +177,9 @@ async register(dto: RegisterOwnerDto) {
       ContentType:  'application/pdf',
       CacheControl: 'no-store, private',
     })
-
-    // Run the presign + DB update in parallel to cut one extra round-trip
-    const [uploadUrl] = await Promise.all([
-      getSignedUrl(this.s3, cmd, { expiresIn: 600 }),
-      (async () => {
-        const current = await this.prisma.owners.findUnique({
-          where:  { id: ownerId },
-          select: { verification_docs: true },
-        })
-        const existingDocs: Prisma.InputJsonObject =
-          current?.verification_docs && typeof current.verification_docs === 'object'
-            ? (current.verification_docs as Prisma.InputJsonObject)
-            : {}
-        const updatedDocs: Prisma.InputJsonObject = {
-          ...(existingDocs as Record<string, Prisma.InputJsonValue>),
-          [docType]: key,
-        }
-        await this.prisma.owners.update({
-          where: { id: ownerId },
-          data:  { verification_docs: updatedDocs, updated_at: new Date() },
-        })
-      })(),
-    ])
-
+    const uploadUrl = await getSignedUrl(this.s3, cmd, { expiresIn: 600 })
+    // NOTE: verification_docs (deprecated JSON field) is no longer written here.
+    // Domain link is written by MediaService.confirmUpload via owner_kyc_documents.
     return { uploadUrl, key }
   }
 
