@@ -38,102 +38,123 @@ export class BookingLifecycleService {
   ) {}
 
   async holdSlot(playerId: string, dto: HoldSlotDto) {
-    const slotDate = new Date(dto.date)
-    const todayUTC = new Date()
-    todayUTC.setUTCHours(0, 0, 0, 0)
-    if (isNaN(slotDate.getTime())) throw new BadRequestException('Invalid date format')
-    if (slotDate < todayUTC) throw new BadRequestException('Cannot book slots in the past')
-    const maxDate = new Date(todayUTC)
-    maxDate.setUTCDate(maxDate.getUTCDate() + MAX_ADVANCE_DAYS)
-    if (slotDate > maxDate) throw new BadRequestException(`Cannot book more than ${MAX_ADVANCE_DAYS} days in advance`)
+  const slotDate = new Date(dto.date)
+  const todayUTC = new Date()
+  todayUTC.setUTCHours(0, 0, 0, 0)
+  if (isNaN(slotDate.getTime())) throw new BadRequestException('Invalid date format')
+  if (slotDate < todayUTC) throw new BadRequestException('Cannot book slots in the past')
+  const maxDate = new Date(todayUTC)
+  maxDate.setUTCDate(maxDate.getUTCDate() + MAX_ADVANCE_DAYS)
+  if (slotDate > maxDate) throw new BadRequestException(`Cannot book more than ${MAX_ADVANCE_DAYS} days in advance`)
 
-    const bookingType = dto.bookingType ?? 'FLEX'
-    const requestedMaxPlayers = dto.maxPlayers
-    const requestedRequiredPlayers = dto.requiredPlayers
-    if (requestedRequiredPlayers && requestedMaxPlayers && requestedRequiredPlayers > requestedMaxPlayers) {
-      throw new BadRequestException('requiredPlayers cannot exceed maxPlayers')
-    }
-    if (bookingType === 'FULL' && requestedRequiredPlayers && requestedMaxPlayers && requestedRequiredPlayers !== requestedMaxPlayers) {
-      throw new BadRequestException('Full booking requires requiredPlayers to equal maxPlayers')
-    }
+  const bookingType = dto.bookingType ?? 'FLEX'
+  const requestedMaxPlayers = dto.maxPlayers
+  const requestedRequiredPlayers = dto.requiredPlayers
+  if (requestedRequiredPlayers && requestedMaxPlayers && requestedRequiredPlayers > requestedMaxPlayers) {
+    throw new BadRequestException('requiredPlayers cannot exceed maxPlayers')
+  }
+  if (bookingType === 'FULL' && requestedRequiredPlayers && requestedMaxPlayers && requestedRequiredPlayers !== requestedMaxPlayers) {
+    throw new BadRequestException('Full booking requires requiredPlayers to equal maxPlayers')
+  }
 
-    const user = await this.prisma.users.findUnique({
-      where: { id: playerId },
-      select: { reliability_score: true, ban_until: true, is_suspended: true, is_active: true, is_verified: true },
+  const user = await this.prisma.users.findUnique({
+    where: { id: playerId },
+    select: { reliability_score: true, ban_until: true, is_suspended: true, is_active: true, is_verified: true },
+  })
+  if (!user?.is_active) throw new NotFoundException('User not found')
+  if (!user.is_verified) throw new ForbiddenException('Please verify your email before booking')
+  if (user.is_suspended) throw new ForbiddenException('Account suspended — contact support')
+  if (user.ban_until && user.ban_until > new Date()) throw new ForbiddenException(`Booking restricted until ${user.ban_until.toISOString()}`)
+  if (user.reliability_score < 40) throw new ForbiddenException(`Reliability score too low (${user.reliability_score}/100)`)
+
+  const lockKey = `${dto.courtId}:${dto.date}:${dto.startTime}`
+
+  return this.prisma.$transaction(async (tx: any) => {
+    const [lock] = await tx.$queryRaw<[{ acquired: boolean }]>`
+      SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})) AS acquired`
+    if (!lock?.acquired) throw new ConflictException('Slot just taken — choose another time')
+
+    // Fetch court FIRST — endTime depends on slot_duration_mins
+    const court = await tx.courts.findUnique({
+      where: { id: dto.courtId, is_active: true },
+      select: { venue_id: true, slot_duration_mins: true, open_time: true, close_time: true, capacity: true, min_players: true },
     })
-    if (!user?.is_active) throw new NotFoundException('User not found')
-    if (!user.is_verified) throw new ForbiddenException('Please verify your email before booking')
-    if (user.is_suspended) throw new ForbiddenException('Account suspended — contact support')
-    if (user.ban_until && user.ban_until > new Date()) throw new ForbiddenException(`Booking restricted until ${user.ban_until.toISOString()}`)
-    if (user.reliability_score < 40) throw new ForbiddenException(`Reliability score too low (${user.reliability_score}/100)`)
+    if (!court) throw new NotFoundException('Court not found or inactive')
 
-    const lockKey = `${dto.courtId}:${dto.date}:${dto.startTime}`
-    return this.prisma.$transaction(async (tx: any) => {
-      const [lock] = await tx.$queryRaw<[{ acquired: boolean }]>`
-        SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})) AS acquired`
-      if (!lock?.acquired) throw new ConflictException('Slot just taken — choose another time')
+    const endTime = addMinutesToTime(dto.startTime, court.slot_duration_mins)
+    if (endTime > court.close_time) throw new BadRequestException('Slot extends beyond closing time')
 
-      const existing = await tx.bookings.findFirst({
+    // Range-overlap conflict check — both bookings and owner blocks
+    const [existing, blockedSlot] = await Promise.all([
+      tx.bookings.findFirst({
         where: {
-          court_id: dto.courtId,
+          court_id:     dto.courtId,
           booking_date: new Date(dto.date),
-          start_time: dto.startTime,
-          status: { in: ['HELD', 'PENDING_PAYMENT', 'CONFIRMED'] },
+          status:       { in: ['HELD', 'PENDING_PAYMENT', 'CONFIRMED'] },
+          start_time:   { lt: endTime },
+          end_time:     { gt: dto.startTime },
         },
         select: { id: true },
-      })
-      if (existing) throw new ConflictException('Slot is already booked')
-
-      const court = await tx.courts.findUnique({
-        where: { id: dto.courtId, is_active: true },
-        select: { venue_id: true, slot_duration_mins: true, close_time: true, capacity: true, min_players: true },
-      })
-      if (!court) throw new NotFoundException('Court not found or inactive')
-
-      const effectiveMaxPlayers = requestedMaxPlayers ?? court.capacity
-      const effectiveRequiredPlayers = requestedRequiredPlayers ?? (bookingType === 'FULL' ? effectiveMaxPlayers : court.min_players)
-      if (effectiveMaxPlayers > court.capacity) throw new BadRequestException(`maxPlayers cannot exceed court capacity (${court.capacity})`)
-      if (effectiveRequiredPlayers > effectiveMaxPlayers) throw new BadRequestException('requiredPlayers cannot exceed maxPlayers')
-
-      const endTime = addMinutesToTime(dto.startTime, court.slot_duration_mins)
-      if (endTime > court.close_time) throw new BadRequestException('Slot extends beyond closing time')
-
-      const { price, ruleId } = await calculatePrice(tx as Parameters<typeof calculatePrice>[0], dto.courtId, dto.date, dto.startTime)
-      const bookingMeta: BookingMeta = {
-        joinMode: dto.joinMode ?? 'INVITE_ONLY',
-        costSplitMode: dto.costSplitMode ?? 'ADMIN_PAYS_ALL',
-        description: dto.description?.trim() || null,
-        bookingType,
-        requiredPlayers: effectiveRequiredPlayers,
-        maxPlayers: effectiveMaxPlayers,
-      }
-
-      const booking = await tx.bookings.create({
-        data: {
-          // FIX: schema has no `booking_type` column. Source is PLAYER_SELF for self-serve holds.
-          booking_source: 'PLAYER_SELF',
-          booking_name: dto.bookingName?.trim() || null,
-          player_id: playerId,
-          court_id: dto.courtId,
-          venue_id: court.venue_id,
-          booking_date: new Date(dto.date),
-          start_time: dto.startTime,
-          end_time: endTime,
-          duration_mins: court.slot_duration_mins,
-          total_amount: price,
-          base_price: price,
-          applied_rule_id: ruleId ?? null,
-          status: 'HELD',
-          hold_expires_at: new Date(Date.now() + 7 * 60 * 1000),
-          // FIX: schema uses created_by_user_id (XOR constraint — exactly one creator must be set)
-          created_by_user_id: playerId,
-          booking_meta: bookingMeta as Prisma.InputJsonValue,
+      }),
+      tx.court_blocks.findFirst({
+        where: {
+          court_id:     dto.courtId,
+          block_date:   new Date(dto.date),
+          cancelled_at: null,
+          deleted_at:   null,
+          start_time:   { lt: endTime },
+          end_time:     { gt: dto.startTime },
         },
-      })
-      this.redis.set(this.redis.keys.slotHold(dto.courtId, dto.date, dto.startTime), playerId, 420).catch((e: unknown) => this.logger.error('Redis hold mirror failed', e))
-      return { ...booking, displayAmount: formatPaisa(price) }
-    }, { isolationLevel: 'Serializable', maxWait: 1500, timeout: 5000 })
-  }
+        select: { id: true },
+      }),
+    ])
+    if (existing)     throw new ConflictException('Slot is already booked')
+    if (blockedSlot)  throw new ConflictException('Slot is not available for booking')
+
+    const effectiveMaxPlayers = requestedMaxPlayers ?? court.capacity
+    const effectiveRequiredPlayers = requestedRequiredPlayers ?? (bookingType === 'FULL' ? effectiveMaxPlayers : court.min_players)
+    if (effectiveMaxPlayers > court.capacity) throw new BadRequestException(`maxPlayers cannot exceed court capacity (${court.capacity})`)
+    if (effectiveRequiredPlayers > effectiveMaxPlayers) throw new BadRequestException('requiredPlayers cannot exceed maxPlayers')
+
+    const { price, ruleId } = await calculatePrice(tx as Parameters<typeof calculatePrice>[0], dto.courtId, dto.date, dto.startTime)
+
+    const bookingMeta: BookingMeta = {
+      joinMode:         dto.joinMode ?? 'INVITE_ONLY',
+      costSplitMode:    dto.costSplitMode ?? 'ADMIN_PAYS_ALL',
+      description:      dto.description?.trim() || null,
+      bookingType,
+      requiredPlayers:  effectiveRequiredPlayers,
+      maxPlayers:       effectiveMaxPlayers,
+    }
+
+    const booking = await tx.bookings.create({
+      data: {
+        booking_source:    'PLAYER_SELF',
+        booking_name:      dto.bookingName?.trim() || null,
+        player_id:         playerId,
+        court_id:          dto.courtId,
+        venue_id:          court.venue_id,
+        booking_date:      new Date(dto.date),
+        start_time:        dto.startTime,
+        end_time:          endTime,
+        duration_mins:     court.slot_duration_mins,
+        total_amount:      price,
+        base_price:        price,
+        applied_rule_id:   ruleId ?? null,
+        status:            'HELD',
+        hold_expires_at:   new Date(Date.now() + 7 * 60 * 1000),
+        created_by_user_id: playerId,
+        booking_meta:      bookingMeta as Prisma.InputJsonValue,
+      },
+    })
+
+    this.redis
+      .set(this.redis.keys.slotHold(dto.courtId, dto.date, dto.startTime), playerId, 420)
+      .catch((e: unknown) => this.logger.error('Redis hold mirror failed', e))
+
+    return { ...booking, displayAmount: formatPaisa(price) }
+  }, { isolationLevel: 'Serializable', maxWait: 1500, timeout: 5000 })
+}
 
   async confirmPayment(bookingId: string, verified: GatewayVerification, _gateway: 'KHALTI' | 'ESEWA') {
     const booking = await this.prisma.bookings.findUnique({
@@ -267,23 +288,84 @@ export class BookingLifecycleService {
     await this.redis.del(this.redis.keys.slotHold(booking.court_id, dateStr, booking.start_time))
   }
 
-  async getSlotGrid(courtId: string, date: string): Promise<SlotGridItem[]> {
-    const court = await this.prisma.courts.findUnique({ where: { id: courtId, is_active: true }, select: { open_time: true, close_time: true, slot_duration_mins: true } })
-    if (!court) throw new NotFoundException('Court not found')
-    const slots: Array<{ startTime: string; endTime: string }> = []
-    let current = court.open_time
-    while (current < court.close_time) { const endTime = addMinutesToTime(current, court.slot_duration_mins); slots.push({ startTime: current, endTime }); current = endTime }
+async getSlotGrid(courtId: string, date: string): Promise<SlotGridItem[]> {
+  const court = await this.prisma.courts.findUnique({
+    where: { id: courtId, is_active: true },
+    select: { open_time: true, close_time: true, slot_duration_mins: true },
+  })
+  if (!court) throw new NotFoundException('Court not found')
 
-    const [activeBookings, redisVals] = await Promise.all([
-      this.prisma.bookings.findMany({
-        where: { court_id: courtId, booking_date: new Date(date), status: { in: ['HELD', 'PENDING_PAYMENT', 'CONFIRMED'] } },
-        select: { id: true, start_time: true, status: true, match_group: { select: { is_open: true } } },
-      }),
-      this.redis.mget<string>(...slots.map(s => this.redis.keys.slotHold(courtId, date, s.startTime))),
-    ])
-    const dbMap = new Map(activeBookings.map((b: any) => [b.start_time, b.status === 'CONFIRMED' && b.match_group?.is_open ? 'OPEN_TO_JOIN' : b.status]))
-    return slots.map((slot, i) => ({ startTime: slot.startTime, endTime: slot.endTime, status: (dbMap.get(slot.startTime) ?? (redisVals[i] ? 'HELD' : 'AVAILABLE')) as SlotGridItem['status'] }))
+  const slots: Array<{ startTime: string; endTime: string }> = []
+  let current = court.open_time
+  while (current < court.close_time) {
+    const endTime = addMinutesToTime(current, court.slot_duration_mins)
+    slots.push({ startTime: current, endTime })
+    current = endTime
   }
+
+  type ActiveBookingRow = {
+    id: string
+    start_time: string
+    end_time: string
+    status: string
+    match_group: { is_open: boolean } | null
+  }
+  type BlockRangeRow = {
+    start_time: string
+    end_time: string
+  }
+
+  const [activeBookings, blocks, redisVals] = await Promise.all([
+    this.prisma.bookings.findMany({
+      where: {
+        court_id:     courtId,
+        booking_date: new Date(date),
+        status:       { in: ['HELD', 'PENDING_PAYMENT', 'CONFIRMED'] },
+      },
+      select: {
+        id: true, start_time: true, end_time: true, status: true,
+        match_group: { select: { is_open: true } },
+      },
+    }) as Promise<ActiveBookingRow[]>,
+    this.prisma.court_blocks.findMany({
+      where: {
+        court_id:     courtId,
+        block_date:   new Date(date),
+        cancelled_at: null,
+        deleted_at:   null,
+      },
+      select: { start_time: true, end_time: true },
+    }) as Promise<BlockRangeRow[]>,
+    this.redis.mget<string>(...slots.map(s => this.redis.keys.slotHold(courtId, date, s.startTime))),
+  ])
+
+  return slots.map((slot, i): SlotGridItem => {
+    const booking = activeBookings.find(
+      (b: ActiveBookingRow) => b.start_time < slot.endTime && b.end_time > slot.startTime,
+    )
+    const isBlocked = blocks.some(
+      (b: BlockRangeRow) => b.start_time < slot.endTime && b.end_time > slot.startTime,
+    )
+
+    // UNAVAILABLE is not in SlotGridItem['status'] — use CONFIRMED for all "taken" states.
+    // The public controller remaps anything that isn't AVAILABLE/OPEN_TO_JOIN to 'UNAVAILABLE'
+    // before sending to unauthenticated callers.
+    if (isBlocked) {
+      return { startTime: slot.startTime, endTime: slot.endTime, status: 'CONFIRMED' }
+    }
+    if (booking) {
+      const status: SlotGridItem['status'] =
+        booking.status === 'CONFIRMED' && booking.match_group?.is_open
+          ? 'OPEN_TO_JOIN'
+          : (booking.status as SlotGridItem['status'])
+      return { startTime: slot.startTime, endTime: slot.endTime, status }
+    }
+    if (redisVals[i]) {
+      return { startTime: slot.startTime, endTime: slot.endTime, status: 'HELD' }
+    }
+    return { startTime: slot.startTime, endTime: slot.endTime, status: 'AVAILABLE' }
+  })
+}
 
   async getBookings(playerId: string, query: BookingQueryDto) {
     const take = Math.min(query.limit ?? 20, 50)

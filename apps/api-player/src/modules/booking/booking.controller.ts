@@ -1,10 +1,5 @@
-// CHANGED: [SEC-1 rate limit on availability, SEC-2 BookingQueryDto, SEC-5 status masking for public]
-// NEW ISSUES FOUND:
-//   - getBookings passed raw query params without DTO — strings reached service arithmetic (SEC-2)
-//   - getAvailability had no rate limit or cache headers on a public, unauthenticated endpoint (SEC-1)
-//   - Slot grid returned internal statuses (HELD, PENDING_PAYMENT) to unauthenticated callers (SEC-5)
 
-// apps/player-api/src/modules/booking/booking.controller.ts
+// apps/api-player/src/modules/booking/booking.controller.ts
 import {
   Controller, Post, Get, Body, Param, Query,
   ParseUUIDPipe, HttpCode, HttpStatus, Res,
