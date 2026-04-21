@@ -1,18 +1,20 @@
-// apps/owner-api/src/modules/media/media.controller.ts
+// apps/api-owner/src/modules/media/media.controller.ts
 
 import {
   Controller, Post, Get, Delete,
   Body, Query, Param, ParseUUIDPipe, UseGuards,
 } from '@nestjs/common'
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam, ApiQuery } from '@nestjs/swagger'
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam } from '@nestjs/swagger'
 import { Throttle } from '@nestjs/throttler'
 import { MediaService } from '@futsmandu/media'
 import { OwnerJwtGuard } from '../../common/guards/owner-jwt.guard.js'
 import { CurrentOwner } from '../../common/decorators/current-owner.decorator.js'
 import {
-  RequestUploadUrlDto, ConfirmUploadDto,
-  OwnerKycUploadUrlDto, DeleteAssetDto,
+  ConfirmUploadDto,
+  OwnerKycUploadUrlDto,
+  DeleteAssetDto,
 } from '../../dto/media.dto.js'
+// RequestUploadUrlDto removed — generic upload-url endpoint removed
 
 @ApiTags('Media')
 @ApiBearerAuth('Owner-JWT')
@@ -21,37 +23,14 @@ import {
 export class MediaController {
   constructor(private readonly media: MediaService) {}
 
-  // ── Step 1: Get presigned upload URL ──────────────────────────────────────
-
-  @Post('upload-url')
-  @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @ApiOperation({
-    summary: 'Step 1 — Get presigned PUT URL',
-    description:
-      'Returns uploadUrl (PUT directly to R2) + assetId. ' +
-      'For public assets also returns cdnUrl for optimistic display.',
-  })
-  requestUploadUrl(
-    @CurrentOwner() owner: { id: string },
-    @Body() dto: RequestUploadUrlDto,
-  ) {
-    return this.media.requestUploadUrl({
-      assetType:   dto.assetType,
-      ownerId:     owner.id,
-      entityId:    dto.entityId,
-      docType:     dto.docType,
-      contentType: dto.contentType,
-    })
-  }
-
-  // ── Step 2: Confirm upload ────────────────────────────────────────────────
+  // ── Confirm + Status (shared step 2 & 3 for all asset types) ─────────────
 
   @Post('confirm-upload')
   @ApiOperation({
     summary: 'Step 2 — Confirm upload complete',
     description:
-      'Call after the PUT to R2 succeeds. Validates magic bytes, enqueues ' +
-      'processing. Poll /media/status/:assetId until status = ready.',
+      'Call after PUT to R2 succeeds. Validates magic bytes, enqueues processing. ' +
+      'Poll /media/status/:assetId every 1.5s until status = ready.',
   })
   confirmUpload(
     @CurrentOwner() owner: { id: string },
@@ -65,15 +44,12 @@ export class MediaController {
     })
   }
 
-  // ── Step 3: Poll status ───────────────────────────────────────────────────
-
   @Get('status/:assetId')
   @ApiOperation({
     summary: 'Step 3 — Poll processing status',
     description:
-      'Returns { status, progress, webpKey }. ' +
-      'status: pending → processing → ready | failed. ' +
-      'Flutter should poll every 1.5s until status = ready, then use webpKey.',
+      'Returns { status, progress, webpKey, thumbUrl }. ' +
+      'status: pending → processing → ready | failed.',
   })
   getUploadStatus(
     @CurrentOwner() owner: { id: string },
@@ -85,7 +61,8 @@ export class MediaController {
   // ── KYC ───────────────────────────────────────────────────────────────────
 
   @Post('kyc/upload-url')
-  @ApiOperation({ summary: 'Get presigned URL for KYC document upload' })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for KYC document' })
   requestKycUploadUrl(
     @CurrentOwner() owner: { id: string },
     @Body() dto: OwnerKycUploadUrlDto,
@@ -102,19 +79,17 @@ export class MediaController {
   @Get('kyc')
   @ApiOperation({
     summary: 'Get all KYC documents',
-    description: 'Returns array of all uploaded KYC documents with 10-minute signed download URLs.',
+    description: 'Returns all uploaded KYC docs with 10-minute signed download URLs.',
   })
   getAllKycDocuments(@CurrentOwner() owner: { id: string }) {
     return this.media.getAllKycDocUrls(owner.id)
   }
 
-  // POST /kyc/view-url removed (was [DEPRECATED])
-  // Replacement: GET /media/kyc — returns all docs with 10-min signed URLs in one call.
-
-  // ── Profile ───────────────────────────────────────────────────────────────
+  // ── Owner profile ─────────────────────────────────────────────────────────
 
   @Post('profile/upload-url')
-  @ApiOperation({ summary: 'Get presigned URL for owner profile avatar' })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for owner profile avatar' })
   requestOwnerAvatarUploadUrl(@CurrentOwner() owner: { id: string }) {
     return this.media.requestUploadUrl({
       assetType: 'owner_profile',
@@ -126,8 +101,9 @@ export class MediaController {
   // ── Venue assets ──────────────────────────────────────────────────────────
 
   @Post('venues/:venueId/cover/upload-url')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiParam({ name: 'venueId', type: String })
-  @ApiOperation({ summary: 'Get presigned URL for venue cover image' })
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for venue cover image' })
   requestVenueCoverUploadUrl(
     @CurrentOwner() owner: { id: string },
     @Param('venueId', ParseUUIDPipe) venueId: string,
@@ -140,8 +116,9 @@ export class MediaController {
   }
 
   @Post('venues/:venueId/gallery/upload-url')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @ApiParam({ name: 'venueId', type: String })
-  @ApiOperation({ summary: 'Get presigned URL for a venue gallery image' })
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for venue gallery image' })
   requestVenueGalleryUploadUrl(
     @CurrentOwner() owner: { id: string },
     @Param('venueId', ParseUUIDPipe) venueId: string,
@@ -154,8 +131,9 @@ export class MediaController {
   }
 
   @Post('venues/:venueId/verification/upload-url')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiParam({ name: 'venueId', type: String })
-  @ApiOperation({ summary: 'Get presigned URL for venue verification document' })
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for venue verification document' })
   requestVenueVerificationUploadUrl(
     @CurrentOwner() owner: { id: string },
     @Param('venueId', ParseUUIDPipe) venueId: string,
@@ -170,22 +148,19 @@ export class MediaController {
   @Get('venues/:venueId/gallery')
   @ApiParam({ name: 'venueId', type: String })
   @ApiOperation({
-    summary: 'List venue gallery with presigned URLs',
-    description:
-      'Batch-presigns all gallery images in parallel. Subsequent calls served ' +
-      'from 50-min in-memory cache. Returns signedUrl + thumbUrl for each image.',
+    summary: 'List venue gallery',
+    description: 'CDN + thumb URLs per image. Redis-cached for 2 min.',
   })
   async getVenueGallery(
     @Param('venueId', ParseUUIDPipe) venueId: string,
   ) {
     const items = await this.media.getGallery(venueId)
     return items.map(img => ({
-      asset_id:   img.assetId,
-      key:        img.key,
-      cdn_url:    img.cdnUrl,
-      signed_url: img.signedUrl  ?? null,
-      thumb_url:  (img as any).thumbUrl ?? null,
-      webp_url:   img.webpUrl    ?? null,
+      asset_id:    img.assetId,
+      key:         img.key,
+      cdn_url:     img.cdnUrl,
+      thumb_url:   (img as any).thumbUrl ?? null,
+      webp_url:    img.webpUrl            ?? null,
       uploaded_at: img.uploadedAt,
     }))
   }
