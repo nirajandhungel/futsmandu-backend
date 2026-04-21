@@ -1,5 +1,5 @@
 // apps/owner-api/src/modules/venue-management/venue-management.service.ts
-// OPTIMIZED: listGalleryImages() now returns thumbUrl alongside webpUrl.
+// OPTIMIZED: listGalleryImages() queries via venue_media link table (correct schema pattern).
 // Gallery cache is invalidated by MediaService after new uploads.
 
 import {
@@ -12,6 +12,7 @@ import {
 
 import { PrismaService } from '@futsmandu/database'
 import type { Prisma } from '@futsmandu/database'
+import { venue_media_type } from '@futsmandu/database'
 
 import type {
   CreateVenueDto,
@@ -61,16 +62,16 @@ function formatCdnUrl(base: string, key: string): string {
 
 /* ───────────────── TYPES ───────────────── */
 
-/**
- * Explicit Prisma return typing
- * (prevents implicit any in map)
- */
-type GalleryAsset = {
-  id: string
-  key: string
-  webpKey: string | null
-  thumbKey: string | null
-  createdAt: Date
+// venue_media row with media relation selected — used in listGalleryImages
+type VenueMediaRow = {
+  display_order: number
+  media: {
+    id:         string
+    file_key:   string
+    webp_key:   string | null
+    thumb_key:  string | null
+    created_at: Date
+  }
 }
 
 /* ───────────────── SERVICE ───────────────── */
@@ -388,55 +389,54 @@ export class VenueManagementService {
       ownerId,
     )
 
-    const assets =
-      await this.prisma.media_assets.findMany({
-        where: {
-          entityId: venueId,
-          assetType: 'venue_gallery',
-          status: 'ready',
+    // Query via venue_media link table → JOIN media_assets
+    // venue_id index → fast lookup; status filter keeps only ready images
+    const links = await this.prisma.venue_media.findMany({
+      where: {
+        venue_id: venueId,
+        type:     venue_media_type.GALLERY,
+        media: {
+          status:     'completed',
+          deleted_at: null,
         },
-
-        select: {
-          id: true,
-          key: true,
-          webpKey: true,
-          thumbKey: true,
-          createdAt: true,
+      },
+      select: {
+        display_order: true,
+        media: {
+          select: {
+            id:         true,
+            file_key:   true,
+            webp_key:   true,
+            thumb_key:  true,
+            created_at: true,
+          },
         },
+      },
+      orderBy: [
+        { display_order: 'asc' },
+        { created_at:    'desc' },
+      ],
+    })
 
-        orderBy: {
-          createdAt: 'desc',
-        },
-      })
+    return links.map((l: VenueMediaRow) => ({
+      assetId: l.media.id,
 
-    return assets.map(
-      (a: GalleryAsset) => ({
-        assetId: a.id,
+      cdnUrl: formatCdnUrl(
+        this.cdnBase,
+        l.media.file_key,
+      ),
 
-        cdnUrl:
-          formatCdnUrl(
-            this.cdnBase,
-            a.key,
-          ),
+      webpUrl: l.media.webp_key
+        ? formatCdnUrl(this.cdnBase, l.media.webp_key)
+        : undefined,
 
-        webpUrl: a.webpKey
-          ? formatCdnUrl(
-              this.cdnBase,
-              a.webpKey,
-            )
-          : undefined,
+      /** 320×240 — use in grid view */
+      thumbUrl: l.media.thumb_key
+        ? formatCdnUrl(this.cdnBase, l.media.thumb_key)
+        : undefined,
 
-        /** 320×240 — use in grid view */
-        thumbUrl: a.thumbKey
-          ? formatCdnUrl(
-              this.cdnBase,
-              a.thumbKey,
-            )
-          : undefined,
-
-        uploadedAt: a.createdAt,
-      }),
-    )
+      uploadedAt: l.media.created_at,
+    }))
   }
 
   /* ───────────────── OWNERSHIP ───────────────── */
