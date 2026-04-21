@@ -5,14 +5,25 @@ import {
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
 
+// Day-of-week enum: matches PostgreSQL DOW convention (0 = Sunday … 6 = Saturday)
+export enum DayOfWeek {
+  SUN = 'SUN',
+  MON = 'MON',
+  TUE = 'TUE',
+  WED = 'WED',
+  THU = 'THU',
+  FRI = 'FRI',
+  SAT = 'SAT',
+}
+
 export class CreatePricingRuleDto {
   @ApiProperty({ description: 'base | offpeak | weekend | peak | lastminute | custom' })
   @IsIn(['base', 'offpeak', 'weekend', 'peak', 'lastminute', 'custom'])
   rule_type!: string
 
-  @ApiProperty({ description: 'Priority: base=1 offpeak=5 weekend=8 peak=10 lastminute=15 custom=20' })
-  @IsNumber() @Min(1) @Max(20)
-  priority!: number
+  @ApiProperty({ description: 'Priority: base=1 offpeak=5 weekend=8 peak=10 lastminute=15 custom=20 (auto-set for known types)' })
+  @IsOptional() @IsNumber() @Min(1) @Max(20)
+  priority?: number
 
   @ApiProperty({ description: 'Price in paisa (NPR × 100)' })
   @IsNumber() @Min(100)
@@ -22,9 +33,16 @@ export class CreatePricingRuleDto {
   @IsIn(['fixed', 'percent_add', 'percent_off'])
   modifier!: string
 
-  @ApiPropertyOptional({ description: 'Days of week: 0=Sun ... 6=Sat' })
-  @IsOptional() @IsArray() @IsNumber({}, { each: true })
-  days_of_week?: number[]
+  @ApiPropertyOptional({
+    description: 'Days of week as abbreviations: SUN | MON | TUE | WED | THU | FRI | SAT',
+    enum: DayOfWeek,
+    isArray: true,
+    example: ['SAT', 'SUN'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsIn(Object.values(DayOfWeek), { each: true })
+  days_of_week?: DayOfWeek[]
 
   @ApiPropertyOptional() @IsOptional() @IsString() start_time?: string
   @ApiPropertyOptional() @IsOptional() @IsString() end_time?: string
@@ -36,7 +54,15 @@ export class CreatePricingRuleDto {
 export class UpdatePricingRuleDto {
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(100) price?: number
   @ApiPropertyOptional() @IsOptional() @IsIn(['fixed', 'percent_add', 'percent_off']) modifier?: string
-  @ApiPropertyOptional() @IsOptional() @IsArray() days_of_week?: number[]
+  @ApiPropertyOptional({
+    description: 'Days of week as abbreviations: SUN | MON | TUE | WED | THU | FRI | SAT',
+    enum: DayOfWeek,
+    isArray: true,
+  })
+  @IsOptional()
+  @IsArray()
+  @IsIn(Object.values(DayOfWeek), { each: true })
+  days_of_week?: DayOfWeek[]
   @ApiPropertyOptional() @IsOptional() @IsString() start_time?: string
   @ApiPropertyOptional() @IsOptional() @IsString() end_time?: string
   @ApiPropertyOptional() @IsOptional() @IsDateString() date_from?: string
