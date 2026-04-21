@@ -1,20 +1,4 @@
-// apps/owner-admin-api/src/modules/bookings/bookings.service.ts
-// Offline bookings, calendar, attendance marking.
-//
-// Schema alignment fixes applied:
-//   - booking_type removed (no such field in schema); replaced with:
-//       booking_source: 'OFFLINE_COUNTER'  (booking_source enum)
-//       payment_method: dto.payment_method  (payment_method enum: CASH | KHALTI | ESEWA | BANK_TRANSFER)
-//   - created_by → created_by_owner_id  (XOR pattern; service enforces exactly one non-null)
-//   - marked_by_type: 'SYSTEM' corrected to 'USER'|'ADMIN'|'SYSTEM' — owners marking → 'ADMIN'
-//     (schema marked_by_type enum has no 'owner' value; closest semantic match for owner staff is 'ADMIN')
-//   - ListBookings select: removed non-existent booking_type field; added booking_source + payment_method
-//   - EXPIRED added to valid status filter (full booking_status enum)
-//
-// Pre-existing optimisations retained:
-//   C-6: reliability_score decremented with raw SQL GREATEST(0, score - 20)
-//   H-4: Pricing rules fetched ONCE per court, calculatePriceFromRules used in loop
-//   PERF-2: Venue scoping via relation filter (WHERE EXISTS) — no extra round-trip
+// apps/owner-api/src/modules/bookings/bookings.service.ts
 
 import {
   Injectable, NotFoundException, BadRequestException, Logger,
@@ -102,81 +86,114 @@ export class BookingsService {
   //   - payment_method taken from dto.payment_method (CASH | KHALTI | ESEWA | BANK_TRANSFER)
   //   - created_by_owner_id = staffId  (XOR: exactly one of created_by_user/admin/owner_id must be set)
   //   - XOR guard enforced before insert as documented in schema comments
-  async createOfflineBooking(
-    ownerId: string,
-    staffId: string,
-    dto: CreateOfflineBookingDto,
-  ) {
-    const court = await this.prisma.courts.findFirst({
-      where: {
-        id:        dto.court_id,
-        is_active: true,
-        deleted_at: null,
-        venue:     { owner_id: ownerId, deleted_at: null },
-      },
-      select: {
-        id: true, venue_id: true,
-        slot_duration_mins: true, open_time: true, close_time: true,
-      },
-    })
-    if (!court) throw new NotFoundException('Court not found or access denied')
+async createOfflineBooking(ownerId: string, staffId: string, dto: CreateOfflineBookingDto) {
+  const court = await this.prisma.courts.findFirst({
+    where: {
+      id:         dto.court_id,
+      is_active:  true,
+      deleted_at: null,
+      venue:      { owner_id: ownerId, deleted_at: null },
+    },
+    select: {
+      id: true, venue_id: true,
+      slot_duration_mins: true, open_time: true, close_time: true,
+    },
+  })
+  if (!court) throw new NotFoundException('Court not found or access denied')
 
-    if (dto.start_time < court.open_time || dto.start_time >= court.close_time) {
-      throw new BadRequestException(
-        `Start time ${dto.start_time} is outside court hours (${court.open_time}–${court.close_time})`,
-      )
-    }
-
-    const endTime = addMinutesToTime(dto.start_time, court.slot_duration_mins)
-
-    let totalAmount   = 0
-    let appliedRuleId: string | null = null
-    try {
-      const pricing = await calculatePrice(
-        this.prisma, dto.court_id, dto.booking_date, dto.start_time,
-      )
-      totalAmount   = pricing.price
-      appliedRuleId = pricing.ruleId
-    } catch {
-      this.logger.warn(`No pricing rule for court ${dto.court_id} — booking at 0 price`)
-    }
-
-    // XOR guard — schema CHECK constraint requires exactly one creator field set
-    // For offline bookings created by venue owner/staff, created_by_owner_id is set.
-    const booking = await this.prisma.bookings.create({
-      data: {
-        booking_source:         'OFFLINE_COUNTER',
-        payment_method:         dto.payment_method as 'CASH' | 'KHALTI' | 'ESEWA' | 'BANK_TRANSFER',
-        booking_name:           dto.booking_name?.trim() || null,
-        player_id:              null,
-        court_id:               dto.court_id,
-        venue_id:               court.venue_id,
-        booking_date:           new Date(dto.booking_date),
-        start_time:             dto.start_time,
-        end_time:               endTime,
-        duration_mins:          court.slot_duration_mins,
-        total_amount:           totalAmount,
-        base_price:             totalAmount,
-        applied_rule_id:        appliedRuleId,
-        status:                 'CONFIRMED',
-        offline_customer_name:  dto.customer_name,
-        offline_customer_phone: dto.customer_phone,
-        offline_notes:          dto.notes ?? null,
-        // XOR: only created_by_owner_id is set — created_by_user_id and created_by_admin_id remain null
-        created_by_owner_id:    staffId,
-        created_by_user_id:     null,
-        created_by_admin_id:    null,
-      },
-      select: {
-        id: true, booking_source: true, payment_method: true, status: true,
-        start_time: true, end_time: true, booking_date: true,
-        total_amount: true, offline_customer_name: true,
-      },
-    })
-
-    this.logger.log(`Offline booking created: ${booking.id} by owner/staff ${staffId}`)
-    return booking
+  // Grid alignment — rejects 1:30 on a 60-min grid starting at 06:00
+  const [openH, openM] = court.open_time.split(':').map(Number) as [number, number]
+  const [startH, startM] = dto.start_time.split(':').map(Number) as [number, number]
+  const minutesFromOpen = (startH * 60 + startM) - (openH * 60 + openM)
+  if (minutesFromOpen < 0 || minutesFromOpen % court.slot_duration_mins !== 0) {
+    throw new BadRequestException(
+      `Start time ${dto.start_time} must align to the ${court.slot_duration_mins}-min grid (court opens ${court.open_time})`,
+    )
   }
+
+  if (dto.start_time < court.open_time || dto.start_time >= court.close_time) {
+    throw new BadRequestException(
+      `Start time ${dto.start_time} is outside court hours (${court.open_time}–${court.close_time})`,
+    )
+  }
+
+  const endTime = addMinutesToTime(dto.start_time, court.slot_duration_mins)
+
+  // Range-overlap conflict — covers multi-slot bookings and court blocks in one round-trip
+  const [bookingConflict, blockConflict] = await Promise.all([
+    this.prisma.bookings.findFirst({
+      where: {
+        court_id:     dto.court_id,
+        booking_date: new Date(dto.booking_date),
+        status:       { in: ['HELD', 'PENDING_PAYMENT', 'CONFIRMED'] },
+        start_time:   { lt: endTime },
+        end_time:     { gt: dto.start_time },
+      },
+      select: { id: true, status: true },
+    }),
+    this.prisma.court_blocks.findFirst({
+      where: {
+        court_id:     dto.court_id,
+        block_date:   new Date(dto.booking_date),
+        cancelled_at: null,
+        deleted_at:   null,
+        start_time:   { lt: endTime },
+        end_time:     { gt: dto.start_time },
+      },
+      select: { id: true, block_type: true },
+    }),
+  ])
+
+  if (bookingConflict) {
+    throw new BadRequestException(`Slot ${dto.start_time}–${endTime} is already occupied (${bookingConflict.status})`)
+  }
+  if (blockConflict) {
+    throw new BadRequestException(`Slot is blocked for ${blockConflict.block_type} — unblock it first`)
+  }
+
+  let totalAmount   = 0
+  let appliedRuleId: string | null = null
+  try {
+    const pricing = await calculatePrice(this.prisma, dto.court_id, dto.booking_date, dto.start_time)
+    totalAmount   = pricing.price
+    appliedRuleId = pricing.ruleId
+  } catch {
+    this.logger.warn(`No pricing rule for court ${dto.court_id} — booking at 0 price`)
+  }
+
+  const booking = await this.prisma.bookings.create({
+    data: {
+      booking_source:         'OFFLINE_COUNTER',
+      payment_method:         dto.payment_method as 'CASH' | 'KHALTI' | 'ESEWA' | 'BANK_TRANSFER',
+      booking_name:           dto.booking_name?.trim() || null,
+      player_id:              null,
+      court_id:               dto.court_id,
+      venue_id:               court.venue_id,
+      booking_date:           new Date(dto.booking_date),
+      start_time:             dto.start_time,
+      end_time:               endTime,
+      duration_mins:          court.slot_duration_mins,
+      total_amount:           totalAmount,
+      base_price:             totalAmount,
+      applied_rule_id:        appliedRuleId,
+      status:                 'CONFIRMED',
+      offline_customer_name:  dto.customer_name,
+      offline_customer_phone: dto.customer_phone,
+      offline_notes:          dto.notes ?? null,
+      created_by_owner_id:    staffId,
+      created_by_user_id:     null,
+      created_by_admin_id:    null,
+    },
+    select: {
+      id: true, booking_source: true, payment_method: true, status: true,
+      start_time: true, end_time: true, booking_date: true,
+      total_amount: true, offline_customer_name: true,
+    },
+  })
+
+  this.logger.log(`Offline booking created: ${booking.id} by owner/staff ${staffId}`)
+  return booking
+}
 
   // ── List bookings with filters ────────────────────────────────────────────
   // PERF-2: Use Prisma relation filter (generates WHERE EXISTS) instead of
