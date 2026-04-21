@@ -346,6 +346,7 @@ model owners {
   created_bookings      bookings[]                @relation("CreatedByOwner")
   // user_activity_logs back-relation removed: resolve via actor_type + actor_id in service layer
   // media_assets back-relation removed: owner uploads resolved via uploader_type + uploader_id in service layer
+  court_blocks  court_blocks[]
 
   @@index([email])
   @@index([phone])
@@ -388,12 +389,41 @@ model venues {
   reviews               reviews[]
   payouts               owner_payouts[]
   venue_media           venue_media[]
-
+  court_blocks  court_blocks[]
   @@index([owner_id, is_active])
   @@index([is_active, is_verified, avg_rating])
   @@index([slug])
   @@index([latitude, longitude])
   @@index([created_at])
+  @@index([deleted_at])
+}
+
+enum block_type {
+  MAINTENANCE
+  PRIVATE_RESERVATION
+  EVENT
+  PERSONAL
+}
+
+model court_blocks {
+  id                  String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  court_id            String     @db.Uuid
+  venue_id            String     @db.Uuid
+  block_date          DateTime   @db.Date
+  start_time          String
+  end_time            String
+  block_type          block_type
+  note                String?
+  created_by_owner_id String     @db.Uuid
+  created_at          DateTime   @default(now()) @db.Timestamptz(6)
+  cancelled_at        DateTime?  @db.Timestamptz(6)
+  deleted_at          DateTime?  @db.Timestamptz(6)
+
+  court  courts @relation(fields: [court_id], references: [id], onDelete: Restrict)
+  venue  venues @relation(fields: [venue_id], references: [id], onDelete: Restrict)
+  owner  owners @relation(fields: [created_by_owner_id], references: [id], onDelete: Restrict)
+
+  @@index([court_id, block_date, start_time])
   @@index([deleted_at])
 }
 
@@ -417,6 +447,7 @@ model courts {
   bookings           bookings[]
   pricing_rules      pricing_rules[]
   match_groups       match_groups[]
+  court_blocks  court_blocks[]
 
   @@index([venue_id, is_active])
   @@index([court_type, is_active])
