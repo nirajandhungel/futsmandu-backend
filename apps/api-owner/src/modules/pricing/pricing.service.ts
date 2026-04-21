@@ -5,10 +5,16 @@ import { PrismaService } from '@futsmandu/database'
 import type { pricing_modifier } from '@futsmandu/database'
 import { calculatePrice, formatPaisa } from '@futsmandu/utils'
 import type { CreatePricingRuleDto, UpdatePricingRuleDto } from './dto/pricing.dto.js'
+import { DayOfWeek } from './dto/pricing.dto.js'
 
 // Priority constants matching spec
 const PRIORITY_MAP: Record<string, number> = {
   base: 1, offpeak: 5, weekend: 8, peak: 10, lastminute: 15, custom: 20,
+}
+
+// Maps string day abbreviations to PostgreSQL DOW integers (0 = Sun … 6 = Sat)
+const DAY_MAP: Record<string, number> = {
+  SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6,
 }
 
 @Injectable()
@@ -33,13 +39,14 @@ export class PricingService {
   async createRule(ownerId: string, courtId: string, dto: CreatePricingRuleDto) {
     await this.assertCourtOwnership(courtId, ownerId)
 
-    // Enforce canonical priority for known rule types
-    const expectedPriority: number | undefined = PRIORITY_MAP[dto.rule_type]
-    if (expectedPriority !== undefined && dto.priority !== expectedPriority) {
+    // Auto-derive priority for known rule types; only 'custom' needs an explicit value
+    const canonicalPriority: number | undefined = PRIORITY_MAP[dto.rule_type]
+    if (canonicalPriority === undefined && dto.priority === undefined) {
       throw new BadRequestException(
-        `Rule type '${dto.rule_type}' must have priority ${expectedPriority}`,
+        `Rule type 'custom' requires an explicit priority (1–20)`,
       )
     }
+    const priority = canonicalPriority ?? dto.priority!
 
     // Check base rule already exists (only one base allowed)
     if (dto.rule_type === 'base') {
@@ -54,10 +61,10 @@ export class PricingService {
       data: {
         court_id:     courtId,
         rule_type:    dto.rule_type,
-        priority:     dto.priority,
+        priority,
         price:        dto.price,
         modifier:     dto.modifier as 'fixed' | 'percent_add' | 'percent_off',
-        days_of_week: dto.days_of_week ?? [],
+        days_of_week: dto.days_of_week ? dto.days_of_week.map(d => DAY_MAP[d]) : [],
         start_time:   dto.start_time,
         end_time:     dto.end_time,
         date_from:    dto.date_from ? new Date(dto.date_from) : undefined,
@@ -70,13 +77,15 @@ export class PricingService {
 
   async updateRule(ownerId: string, ruleId: string, dto: UpdatePricingRuleDto) {
     await this.assertRuleOwnership(ruleId, ownerId)
+    const { days_of_week, modifier, date_from, date_to, ...rest } = dto
     return this.prisma.pricing_rules.update({
       where: { id: ruleId },
       data: {
-        ...dto,
-        modifier: dto.modifier as pricing_modifier | undefined,
-        date_from: dto.date_from ? new Date(dto.date_from) : undefined,
-        date_to:   dto.date_to   ? new Date(dto.date_to)   : undefined,
+        ...rest,
+        modifier:     modifier as pricing_modifier | undefined,
+        days_of_week: days_of_week ? days_of_week.map(d => DAY_MAP[d]) : undefined,
+        date_from:    date_from ? new Date(date_from) : undefined,
+        date_to:      date_to   ? new Date(date_to)   : undefined,
       },
       select: { id: true, rule_type: true, price: true, is_active: true },
     })
