@@ -21,6 +21,7 @@
     "@futsmandu/media-core": "workspace:*",
     "@futsmandu/media-storage": "workspace:*",
     "@futsmandu/queues": "workspace:*",
+    "@futsmandu/redis": "workspace:*",
     "@nestjs/bullmq": "^11.0.2",
     "@nestjs/common": "^11.0.11",
     "bullmq": "^5.34.8",

@@ -12,6 +12,14 @@ import { InjectQueue } from '@nestjs/bullmq'
 import { Queue } from 'bullmq'
 
 import { PrismaService } from '@futsmandu/database'
+import type { Prisma } from '@futsmandu/database'
+// ── Import generated Prisma enums so queries are fully typed ──────────────────
+// Adjust this path to match wherever your generated client is re-exported from.
+import {
+  media_asset_type,
+  media_status,
+  actor_type,
+} from '@futsmandu/database'
 import { StorageService } from '@futsmandu/media-storage'
 import { RedisService } from '@futsmandu/redis'
 
@@ -33,6 +41,7 @@ import type {
   GalleryItem,
   UploadStatusResult,
   AssetType,
+  AssetStatus,
 } from '@futsmandu/media-core'
 
 import { QUEUE_IMAGE_PROCESSING } from '@futsmandu/queues'
@@ -41,698 +50,526 @@ import { ENV } from '@futsmandu/utils'
 /* ───────────────── Constants ───────────────── */
 
 const MAGIC_BYTES: Record<string, string> = {
-  ffd8ff: 'image/jpeg',
+  ffd8ff:     'image/jpeg',
   '89504e47': 'image/png',
   '52494646': 'image/webp',
   '25504446': 'application/pdf',
 }
 
-const STATUS_CACHE_TTL = 5
-const GALLERY_CACHE_TTL = 120
+const STATUS_CACHE_TTL_TRANSIENT = 5    // seconds — pending / processing (poll frequently)
+const STATUS_CACHE_TTL_TERMINAL  = 300  // seconds — completed / failed (immutable, cache longer)
+const GALLERY_CACHE_TTL          = 120  // seconds
 
-/* ───────────────── Types ───────────────── */
-
-type GalleryAsset = {
-  id: string
-  key: string
-  webpKey: string | null
-  thumbKey: string | null
-  createdAt: Date
-  status: string
-}
+// Maps our AssetType to the Prisma-generated media_asset_type enum member.
+// Centralised here so it's maintained in one place.
+const DB_ASSET_TYPE_MAP = {
+  player_profile:     media_asset_type.USER_AVATAR,
+  owner_profile:      media_asset_type.OWNER_AVATAR,
+  venue_cover:        media_asset_type.VENUE_COVER,
+  venue_gallery:      media_asset_type.VENUE_GALLERY,
+  venue_verification: media_asset_type.SYSTEM,
+  // kyc_document is resolved dynamically below (depends on docType)
+} as const satisfies Partial<Record<AssetType, media_asset_type>>
 
 /* ───────────────── Service ───────────────── */
 
 @Injectable()
 export class MediaService {
 
-  private readonly logger = new Logger(MediaService.name)
+  private readonly logger  = new Logger(MediaService.name)
   private readonly cdnBase: string
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly storage: StorageService,
-    private readonly redis: RedisService,
+    private readonly prisma:    PrismaService,
+    private readonly storage:   StorageService,
+    private readonly redis:     RedisService,
 
     @InjectQueue(QUEUE_IMAGE_PROCESSING)
     private readonly imgQueue: Queue,
   ) {
-
-    this.cdnBase =
-      (
-        ENV['S3_CDN_BASE_URL'] ||
-        ENV['S3_ENDPOINT'] ||
-        ''
-      ).replace(/\/+$/, '')
+    this.cdnBase = (
+      ENV['S3_CDN_BASE_URL'] || ENV['S3_ENDPOINT'] || ''
+    ).replace(/\/+$/, '')
   }
 
-  /* ───────────────── Step 1 — Upload URL ───────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+   * PRIVATE HELPERS
+   * ─────────────────────────────────────────────────────────────────────── */
 
-  async requestUploadUrl(
-    opts: RequestUploadUrlOptions,
-  ): Promise<UploadUrlResult> {
+  /** Resolves the correct Prisma enum value for a KYC docType. */
+  private kycDbAssetType(docType?: string): media_asset_type {
+    if (docType === 'business_registration') return media_asset_type.OWNER_BUSINESS_REGISTRATION
+    if (docType === 'business_pan')          return media_asset_type.OWNER_PAN
+    return media_asset_type.OWNER_CITIZENSHIP
+  }
 
+  /** True for asset types whose keys should be served via public CDN. */
+  private isPublicAsset(assetType: AssetType): boolean {
+    return assetType !== 'kyc_document' && assetType !== 'venue_verification'
+  }
+
+  /* ─────────────────────────────────────────────────────────────────────────
+   * STEP 1 — REQUEST UPLOAD URL
+   * ─────────────────────────────────────────────────────────────────────── */
+
+  async requestUploadUrl(opts: RequestUploadUrlOptions): Promise<UploadUrlResult> {
+    // Ownership validation — single DB query for venue types (see validateOwnership)
     await this.validateOwnership(opts)
 
-    const allowedMimes =
-      getAllowedMimeTypesForAssetType(
-        opts.assetType,
-      )
+    const allowedMimes   = getAllowedMimeTypesForAssetType(opts.assetType)
+    const contentType    = opts.contentType && (allowedMimes as readonly string[]).includes(opts.contentType)
+      ? opts.contentType
+      : allowedMimes[0]
 
-    const contentType =
-      opts.contentType &&
-        (allowedMimes as readonly string[]).includes(
-          opts.contentType,
-        )
-        ? opts.contentType
-        : allowedMimes[0]
+    const ext            = getPreferredExtensionForMimeType(
+      contentType as Parameters<typeof getPreferredExtensionForMimeType>[0],
+    )
+    const key            = generateMediaKey({ assetType: opts.assetType, entityId: opts.entityId, docType: opts.docType, extension: ext })
+    const cacheControlStr = getCacheControl(opts.assetType)
 
-    const ext =
-      getPreferredExtensionForMimeType(
-        contentType as Parameters<typeof getPreferredExtensionForMimeType>[0],
-      )
+    const dbAssetType: media_asset_type = opts.assetType === 'kyc_document'
+      ? this.kycDbAssetType(opts.docType)
+      : DB_ASSET_TYPE_MAP[opts.assetType as keyof typeof DB_ASSET_TYPE_MAP]
 
-    const key =
-      generateMediaKey({
-        assetType: opts.assetType,
-        entityId: opts.entityId,
-        docType: opts.docType,
-        extension: ext,
-      })
+    // Presign upload + upsert asset row — in parallel
+    const [uploadUrl, assetRow] = await Promise.all([
+      this.storage.presignUpload({ key, contentType, cacheControl: cacheControlStr, expiresIn: 600 }),
 
-    const cacheControlStr = getCacheControl(opts.assetType);
-    const [uploadUrl, assetRow] =
-      await Promise.all([
+      this.prisma.media_assets.upsert({
+        where:  { file_key: key },
+        create: {
+          file_key:      key,
+          asset_type:    dbAssetType,
+          status:        media_status.pending,
+          uploader_id:   opts.ownerId,
+          uploader_type: opts.assetType === 'player_profile' ? actor_type.USER : actor_type.OWNER,
+          metadata:      { entityId: opts.entityId, originalAssetType: opts.assetType },
+        },
+        update: {
+          status:        media_status.pending,
+          uploader_id:   opts.ownerId,
+          uploader_type: opts.assetType === 'player_profile' ? actor_type.USER : actor_type.OWNER,
+          metadata:      { entityId: opts.entityId, originalAssetType: opts.assetType },
+          updated_at:    new Date(),
+        },
+        select: { id: true },
+      }),
+    ])
 
-        this.storage.presignUpload({
-          key,
-          contentType,
-          cacheControl: cacheControlStr,
-          expiresIn: 600,
-        }),
-
-        this.prisma.media_assets.upsert({
-          where: { file_key: key },
-          create: {
-            file_key: key,
-            asset_type: opts.assetType === 'kyc_document'
-              ? (opts.docType === 'business_registration' ? 'OWNER_BUSINESS_REGISTRATION' : opts.docType === 'business_pan' ? 'OWNER_PAN' : 'OWNER_CITIZENSHIP')
-              : opts.assetType === 'player_profile' ? 'USER_AVATAR'
-                : opts.assetType === 'owner_profile' ? 'OWNER_AVATAR'
-                  : opts.assetType === 'venue_cover' ? 'VENUE_COVER'
-                    : opts.assetType === 'venue_gallery' ? 'VENUE_GALLERY'
-                      : 'SYSTEM',
-            status: 'pending',
-            uploader_id: opts.ownerId,
-            uploader_type: opts.assetType === 'player_profile' ? 'USER' : 'OWNER',
-            metadata: { entityId: opts.entityId, originalAssetType: opts.assetType }
-          },
-          update: {
-            status: 'pending',
-            uploader_id: opts.ownerId,
-            uploader_type: opts.assetType === 'player_profile' ? 'USER' : 'OWNER',
-            metadata: { entityId: opts.entityId, originalAssetType: opts.assetType },
-            updated_at: new Date(),
-          },
-          select: { id: true },
-        }),
-      ])
-
-    const result: UploadUrlResult = {
-      assetId: assetRow.id,
+    return {
+      assetId:  assetRow.id,
       uploadUrl,
       key,
       requiredHeaders: {
-        'Content-Type': contentType,
+        'Content-Type':  contentType,
         'Cache-Control': cacheControlStr,
       },
       expiresIn: 600,
+      ...(this.isPublicAsset(opts.assetType) && {
+        cdnUrl:  this.storage.cdnUrl(this.cdnBase, key),
+        webpKey: predictWebpKey(key),
+      }),
     }
-
-    const isPublic =
-      !['kyc_document', 'venue_verification']
-        .includes(opts.assetType)
-
-    if (isPublic) {
-
-      result.cdnUrl =
-        this.storage.cdnUrl(
-          this.cdnBase,
-          key,
-        )
-
-      result.webpKey =
-        predictWebpKey(key)
-    }
-
-    return result
   }
 
-  /* ───────────────── Step 2 — Confirm Upload ───────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+   * STEP 2 — CONFIRM UPLOAD
+   * ─────────────────────────────────────────────────────────────────────── */
 
-  async confirmUpload(
-    opts: ConfirmUploadOptions,
-  ): Promise<ConfirmUploadResult> {
+  async confirmUpload(opts: ConfirmUploadOptions): Promise<ConfirmUploadResult> {
+    const asset = await this.prisma.media_assets.findFirst({
+      where:  { id: opts.assetId, uploader_id: opts.ownerId },
+      select: { id: true, status: true, file_key: true },
+    })
 
-    const asset =
-      await this.prisma.media_assets.findFirst({
-        where: {
-          id: opts.assetId,
-          uploader_id: opts.ownerId,
-        },
+    if (!asset) throw new NotFoundException('Asset not found')
 
-        select: {
-          id: true,
-          status: true,
-          file_key: true,
-        },
-      })
+    if (asset.file_key !== opts.key) throw new BadRequestException('Key mismatch')
 
-    if (!asset)
-      throw new NotFoundException(
-        'Asset not found',
-      )
-
-    if (asset.file_key !== opts.key) {
-      throw new BadRequestException(
-        'Key mismatch',
-      )
-    }
-
-    if (asset.status !== 'pending') {
-
+    // Idempotent — already confirmed, return current state immediately
+    if (asset.status !== media_status.pending) {
       return {
-        message: 'Already confirmed',
-        assetId: asset.id,
-
-        cdnUrl:
-          this.storage.cdnUrl(
-            this.cdnBase,
-            asset.file_key,
-          ),
-
-        webpKey:
-          predictWebpKey(asset.file_key),
-
-        thumbKey:
-          predictThumbKey(asset.file_key),
-
-        status: asset.status as any,
+        message:  'Already confirmed',
+        assetId:  asset.id,
+        cdnUrl:   this.storage.cdnUrl(this.cdnBase, asset.file_key),
+        webpKey:  predictWebpKey(asset.file_key),
+        thumbKey: predictThumbKey(asset.file_key),
+        status:   asset.status as AssetStatus,
       }
     }
 
-    /* Validate magic bytes */
-
+    // ── Magic-byte validation (fail fast on unsupported file types) ──────────
     try {
+      const header = await this.storage.downloadRange(opts.key, 0, 7)
+      const hex    = header.toString('hex')
+      const ok     = Object.keys(MAGIC_BYTES).some(magic => hex.startsWith(magic))
 
-      const header =
-        await this.storage.downloadRange(
-          opts.key,
-          0,
-          7,
-        )
-
-      const hex =
-        header.toString('hex')
-
-      const detected =
-        Object.entries(MAGIC_BYTES)
-          .find(([magic]) =>
-            hex.startsWith(magic),
-          )
-
-      if (!detected) {
-
+      if (!ok) {
         await this.prisma.media_assets.update({
           where: { id: opts.assetId },
-          data: { status: 'failed' },
+          data:  { status: media_status.failed },
         })
-
-        throw new BadRequestException(
-          'Unsupported file type',
-        )
+        throw new BadRequestException('Unsupported file type')
       }
-
     } catch (err) {
-
-      if (
-        err instanceof BadRequestException
-      ) throw err
-
-      this.logger.warn(
-        `[${opts.assetId}] Magic check failed — continuing`,
-      )
+      if (err instanceof BadRequestException) throw err
+      // R2 range-request failure is non-fatal — let the processor handle it
+      this.logger.warn(`[${opts.assetId}] Magic check failed — continuing`)
     }
 
-    const { width, height } =
-      getResizeDimensions(
-        opts.assetType,
-      )
+    const { width, height } = getResizeDimensions(opts.assetType)
 
-    const [updatedAsset] =
-      await Promise.all([
+    // DB update + queue add — in parallel
+    const [updatedAsset] = await Promise.all([
+      this.prisma.media_assets.update({
+        where:  { id: opts.assetId },
+        data:   { status: media_status.processing, updated_at: new Date() },
+        select: { id: true, file_key: true },
+      }),
 
-        this.prisma.media_assets.update({
-          where: { id: opts.assetId },
-
-          data: {
-            status: 'processing',
-            updated_at: new Date(),
-          },
-
-          select: {
-            id: true,
-            file_key: true,
-          },
-        }),
-
-        this.imgQueue.add(
-          'process-media',
-          {
-            assetId: opts.assetId,
-            key: opts.key,
-            bucket: ENV['S3_BUCKET'],
-            assetType: opts.assetType,
-            targetWidth: width,
-            targetHeight: height,
-          },
-          {
-            priority:
-              opts.assetType.startsWith(
-                'venue',
-              )
-                ? 1
-                : 5,
-
-            attempts: 3,
-
-            backoff: {
-              type: 'exponential',
-              delay: 2000,
-            },
-
-            removeOnComplete: {
-              count: 200,
-            },
-
-            removeOnFail: {
-              count: 500,
-            },
-          },
-        ),
-      ])
-
-    const isPublic =
-      !['kyc_document', 'venue_verification']
-        .includes(opts.assetType)
+      this.imgQueue.add(
+        'process-media',
+        {
+          assetId:      opts.assetId,
+          key:          opts.key,
+          bucket:       ENV['S3_BUCKET'],
+          assetType:    opts.assetType,
+          targetWidth:  width,
+          targetHeight: height,
+        },
+        {
+          priority:         opts.assetType.startsWith('venue') ? 1 : 5,
+          attempts:         3,
+          backoff:          { type: 'exponential', delay: 2000 },
+          removeOnComplete: { count: 200 },
+          removeOnFail:     { count: 500 },
+        },
+      ),
+    ])
 
     return {
-
-      message:
-        'Upload confirmed — processing in background',
-
-      assetId: updatedAsset.id,
-
-      cdnUrl: isPublic
-        ? this.storage.cdnUrl(
-          this.cdnBase,
-          updatedAsset.file_key,
-        )
+      message:  'Upload confirmed — processing in background',
+      assetId:  updatedAsset.id,
+      cdnUrl:   this.isPublicAsset(opts.assetType)
+        ? this.storage.cdnUrl(this.cdnBase, updatedAsset.file_key)
         : undefined,
-
-      webpKey: null,
+      webpKey:  null,
       thumbKey: null,
-      status: 'processing',
+      status:   'processing',
     }
   }
 
-  /* ───────────────── Step 3 — Status Polling ───────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+   * STEP 3 — STATUS POLLING
+   * ─────────────────────────────────────────────────────────────────────── */
 
-  async getUploadStatus(
-    assetId: string,
-    ownerId: string,
-  ): Promise<UploadStatusResult> {
+  async getUploadStatus(assetId: string, ownerId: string): Promise<UploadStatusResult> {
+    const cacheKey = `media:status:${assetId}`
+    const cached   = await this.redis.get<UploadStatusResult>(cacheKey)
 
-    const cacheKey =
-      `media:status:${assetId}`
+    // Return cached value ONLY for non-terminal states.
+    // Terminal (completed/failed) states skip cache so we always serve fresh signedUrls.
+    if (cached && cached.status !== 'completed' && cached.status !== 'failed') return cached
 
-    const cached =
-      await this.redis.get<UploadStatusResult>(
-        cacheKey,
-      )
+    // Fetch status + all variant keys
+    const asset = await this.prisma.media_assets.findFirst({
+      where:  { id: assetId, uploader_id: ownerId },
+      select: { status: true, webp_key: true, thumb_key: true, file_key: true, asset_type: true },
+    })
 
-    if (cached) return cached
+    if (!asset) throw new NotFoundException('Asset not found')
 
-    const asset =
-      await this.prisma.media_assets.findFirst({
-        where: {
-          id: assetId,
-          uploader_id: ownerId,
-        },
+    // Private assets (KYC, verification docs) — no CDN URLs; use presigned download instead
+    const isPublic =
+      asset.asset_type !== media_asset_type.OWNER_CITIZENSHIP &&
+      asset.asset_type !== media_asset_type.OWNER_BUSINESS_REGISTRATION &&
+      asset.asset_type !== media_asset_type.OWNER_PAN &&
+      asset.asset_type !== media_asset_type.SYSTEM
 
-        select: {
-          status: true,
-          webp_key: true,
-          thumb_key: true,
-        },
-      })
-
-    if (!asset)
-      throw new NotFoundException(
-        'Asset not found',
-      )
-
-    const result: UploadStatusResult = {
-
-      status: asset.status as any,
-
-      progress:
-        asset.status === 'completed' ? 100 : asset.status === 'processing' ? 50 : 0,
-
-      webpKey:
-        asset.webp_key,
-
-      thumbKey:
-        asset.thumb_key,
-
-      thumbUrl:
-        asset.thumb_key
-          ? this.storage.cdnUrl(
-            this.cdnBase,
-            asset.thumb_key,
-          )
-          : undefined,
+    // For completed private assets, generate a presigned URL so Flutter can display the image.
+    // Prefer webp_key variant (processed) over raw key — smaller and faster to render.
+    // signedUrl is generated fresh per call and NOT stored in Redis to prevent serving expired URLs.
+    let signedUrl: string | null = null
+    if (!isPublic && asset.status === media_status.completed) {
+      const keyToSign = asset.webp_key ?? asset.file_key
+      signedUrl = await this.storage.presignGet(keyToSign, 600).catch(() => null)
     }
 
-    if (
-      asset.status === 'processing' ||
-      asset.status === 'pending'
-    ) {
+    const result: UploadStatusResult = {
+      status:   asset.status as AssetStatus,
+      progress: asset.status === media_status.completed ? 100
+              : asset.status === media_status.processing ? 50
+              : 0,
+      webpKey:    asset.webp_key  ?? null,
+      thumbKey:   asset.thumb_key ?? null,
+      cdnUrl:     isPublic ? this.storage.cdnUrl(this.cdnBase, asset.file_key) : undefined,
+      webpUrl:    isPublic && asset.webp_key
+        ? this.storage.cdnUrl(this.cdnBase, asset.webp_key)
+        : null,
+      thumbUrl:   asset.thumb_key
+        ? this.storage.cdnUrl(this.cdnBase, asset.thumb_key)
+        : null,
+      signedUrl, // null for public assets or non-completed private assets
+    }
 
-      await this.redis.set(
-        cacheKey,
-        result,
-        STATUS_CACHE_TTL,
-      )
+    // Only cache transient states — terminal results are cheap to re-fetch and must always
+    // be served fresh (signedUrls must not come from a stale cache entry).
+    if (asset.status === media_status.pending || asset.status === media_status.processing) {
+      await this.redis.set(cacheKey, result, STATUS_CACHE_TTL_TRANSIENT)
     }
 
     return result
   }
 
-  /* ───────────────── Gallery ───────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+   * GALLERY
+   * ─────────────────────────────────────────────────────────────────────── */
 
-  async getGallery(
-    venueId: string,
-  ): Promise<GalleryItem[]> {
-
-    const cacheKey =
-      `media:gallery:${venueId}`
-
-    const cached =
-      await this.redis.get<GalleryItem[]>(
-        cacheKey,
-      )
-
+  async getGallery(venueId: string): Promise<GalleryItem[]> {
+    const cacheKey = `media:gallery:${venueId}`
+    const cached   = await this.redis.get<GalleryItem[]>(cacheKey)
     if (cached) return cached
 
-    const assets =
-      await this.prisma.media_assets.findMany({
-        where: {
-          asset_type: 'VENUE_GALLERY',
-          status: 'completed',
-        },
+    type Row = Prisma.media_assetsGetPayload<{
+      select: { id: true; file_key: true; webp_key: true; thumb_key: true; created_at: true; status: true }
+    }>
 
-        select: {
-          id: true,
-          file_key: true,
-          webp_key: true,
-          thumb_key: true,
-          created_at: true,
-          status: true,
-        },
+    const assets: Row[] = await this.prisma.media_assets.findMany({
+      where: {
+        asset_type: media_asset_type.VENUE_GALLERY,
+        status:     media_status.completed,
+        file_key:   { startsWith: `venues/${venueId}/gallery/` },
+        deleted_at: null,
+      },
+      select:  { id: true, file_key: true, webp_key: true, thumb_key: true, created_at: true, status: true },
+      orderBy: { created_at: 'desc' },
+      take:    50,
+    })
 
-        orderBy: {
-          created_at: 'desc',
-        },
+    const items: GalleryItem[] = assets.map(a => ({
+      assetId:    a.id,
+      key:        a.file_key,
+      cdnUrl:     this.storage.cdnUrl(this.cdnBase, a.file_key),
+      webpUrl:    a.webp_key  ? this.storage.cdnUrl(this.cdnBase, a.webp_key)  : undefined,
+      thumbUrl:   a.thumb_key ? this.storage.cdnUrl(this.cdnBase, a.thumb_key) : undefined,
+      uploadedAt: a.created_at,
+      status:     a.status as AssetStatus,
+    }))
 
-        take: 50,
-      })
-
-    const items: GalleryItem[] =
-      assets.map(
-        (a: any) => ({
-
-          assetId: a.id,
-
-          key: a.file_key,
-
-          cdnUrl:
-            this.storage.cdnUrl(
-              this.cdnBase,
-              a.file_key,
-            ),
-
-          webpUrl:
-            a.webp_key
-              ? this.storage.cdnUrl(
-                this.cdnBase,
-                a.webp_key,
-              )
-              : undefined,
-
-          thumbUrl:
-            a.thumb_key
-              ? this.storage.cdnUrl(
-                this.cdnBase,
-                a.thumb_key,
-              )
-              : undefined,
-
-          uploadedAt:
-            a.created_at,
-
-          status:
-            a.status as any,
-        }),
-      )
-
-    await this.redis.set(
-      cacheKey,
-      items,
-      GALLERY_CACHE_TTL,
-    )
-
+    await this.redis.set(cacheKey, items, GALLERY_CACHE_TTL)
     return items
   }
-  /* ───────────────── Signed URLs (Admin Workflow) ───────────────── */
 
-  async getAllKycDocUrls(ownerId: string, expiresIn = 600): Promise<Array<{ docType: string, downloadUrl: string, expiresIn: number, uploadedAt: Date }>> {
-    const assets = await this.prisma.media_assets.findMany({
-      where: {
-        uploader_id: ownerId,
-        asset_type: { in: ['OWNER_CITIZENSHIP', 'OWNER_BUSINESS_REGISTRATION', 'OWNER_PAN'] },
-      },
-      orderBy: { created_at: 'desc' },
-      select: { file_key: true, created_at: true },
-    })
+  /* ─────────────────────────────────────────────────────────────────────────
+   * KYC SIGNED URLS
+   * ─────────────────────────────────────────────────────────────────────── */
 
-    const items = await Promise.all(
-      assets.map(async (asset: { file_key: string; created_at: Date }) => {
-        const match = asset.file_key.match(/\/kyc\/([^/.]+)\.[a-z0-9]+$/i)
-        const docType = match ? match[1] : 'document'
-        const downloadUrl = await this.storage.presignGet(asset.file_key, expiresIn)
+  async getAllKycDocUrls(
+    ownerId:   string,
+    expiresIn = 600,
+  ): Promise<Array<{
+    assetId:         string
+    docType:         string
+    downloadUrl:     string
+    expiresIn:       number
+    uploadedAt:      Date
+    /** KYC verification status: PENDING | VERIFIED | REJECTED */
+    kycStatus:       string
+    rejectionReason: string | null
+  }>> {
 
-        return {
-          docType,
-          downloadUrl,
-          expiresIn,
-          uploadedAt: asset.created_at,
+    // Single query — join media_assets → owner_kyc_documents in one round-trip
+    type KycRow = Prisma.media_assetsGetPayload<{
+      select: {
+        id: true
+        file_key: true
+        webp_key: true
+        status: true
+        created_at: true
+        owner_kyc_documents: {
+          select: { status: true; rejection_reason: true }
+          take: 1
+          orderBy: { created_at: 'desc' }
         }
-      })
-    )
-
-    const uniqueItems: Array<{ docType: string, downloadUrl: string, expiresIn: number, uploadedAt: Date }> = []
-    const seen = new Set<string>()
-
-    for (const item of items) {
-      if (!seen.has(item.docType)) {
-        seen.add(item.docType)
-        uniqueItems.push(item)
       }
-    }
+    }>
 
-    return uniqueItems
+    const assets: KycRow[] = await this.prisma.media_assets.findMany({
+      where: {
+        uploader_id: ownerId,
+        asset_type: { in: [
+          media_asset_type.OWNER_CITIZENSHIP,
+          media_asset_type.OWNER_BUSINESS_REGISTRATION,
+          media_asset_type.OWNER_PAN,
+        ]},
+        deleted_at: null,
+      },
+      orderBy: { created_at: 'desc' },
+      select: {
+        id:          true,
+        file_key:    true,
+        webp_key:    true,
+        status:      true,
+        created_at:  true,
+        owner_kyc_documents: {
+          select:  { status: true, rejection_reason: true },
+          take:    1,
+          orderBy: { created_at: 'desc' },
+        },
+      },
+    })
+
+    // De-duplicate: keep the latest asset per docType slug
+    const seenTypes  = new Set<string>()
+    const unique = assets.filter((a: KycRow) => {
+      const match   = a.file_key.match(/\/kyc\/([^/.]+)\.[a-z0-9]+$/i)
+      const docType = match ? match[1] : 'document'
+      if (seenTypes.has(docType)) return false
+      seenTypes.add(docType)
+      return true
+    })
+
+    // Prefer the processed webp variant for display (smaller, faster) — fall back to original
+    const keysToSign = unique.map((a: KycRow) => a.webp_key ?? a.file_key)
+    const signedUrls = await this.storage.presignGetBatch(keysToSign, expiresIn)
+
+    return unique.map((a: KycRow, i: number) => {
+      const match   = a.file_key.match(/\/kyc\/([^/.]+)\.[a-z0-9]+$/i)
+      const kycDoc  = (a.owner_kyc_documents as Array<{ status: string; rejection_reason: string | null }>)[0]
+      return {
+        assetId:         a.id,
+        docType:         match ? match[1] : 'document',
+        downloadUrl:     signedUrls[i] ?? '',
+        expiresIn,
+        uploadedAt:      a.created_at,
+        kycStatus:       kycDoc?.status       ?? 'PENDING',
+        rejectionReason: kycDoc?.rejection_reason ?? null,
+      }
+    })
   }
 
-  async getKycDocUrl(ownerId: string, docType?: string, expiresIn = 600): Promise<{ downloadUrl: string; expiresIn: number }> {
+  async getKycDocUrl(
+    ownerId:   string,
+    docType?:  string,
+    expiresIn = 600,
+  ): Promise<{ downloadUrl: string; expiresIn: number }> {
     const asset = await this.prisma.media_assets.findFirst({
       where: {
         uploader_id: ownerId,
-        asset_type: { in: ['OWNER_CITIZENSHIP', 'OWNER_BUSINESS_REGISTRATION', 'OWNER_PAN'] },
+        asset_type: { in: [
+          media_asset_type.OWNER_CITIZENSHIP,
+          media_asset_type.OWNER_BUSINESS_REGISTRATION,
+          media_asset_type.OWNER_PAN,
+        ]},
         ...(docType ? { file_key: { contains: `_${docType}.` } } : {}),
+        deleted_at: null,
       },
       orderBy: { created_at: 'desc' },
-      select: { file_key: true },
+      select:  { file_key: true },
     })
 
-    if (!asset) {
-      throw new NotFoundException('KYC document not found')
-    }
+    if (!asset) throw new NotFoundException('KYC document not found')
 
-    const downloadUrl = await this.storage.presignGet(asset.file_key, expiresIn)
-    return { downloadUrl, expiresIn }
+    return { downloadUrl: await this.storage.presignGet(asset.file_key, expiresIn), expiresIn }
   }
 
-  async getVerificationDocUrl(venueId: string, key: string, expiresIn = 600): Promise<{ downloadUrl: string; expiresIn: number }> {
+  async getVerificationDocUrl(
+    venueId:   string,
+    key:       string,
+    expiresIn = 600,
+  ): Promise<{ downloadUrl: string; expiresIn: number }> {
+    const expectedPrefix = `venues/${venueId}/verification/`
+    if (!key.startsWith(expectedPrefix)) {
+      throw new ForbiddenException('Key does not belong to this venue')
+    }
+
     const asset = await this.prisma.media_assets.findFirst({
-      where: {
-        asset_type: 'SYSTEM',
-        file_key: key,
-      },
+      where:  { file_key: key, asset_type: media_asset_type.SYSTEM, deleted_at: null },
       select: { file_key: true },
     })
 
-    if (!asset) {
-      throw new NotFoundException('Verification document not found')
-    }
+    if (!asset) throw new NotFoundException('Verification document not found')
 
-    const downloadUrl = await this.storage.presignGet(asset.file_key, expiresIn)
-    return { downloadUrl, expiresIn }
+    return { downloadUrl: await this.storage.presignGet(asset.file_key, expiresIn), expiresIn }
   }
 
   async getImageUrl(key: string, expiresIn = 300): Promise<string> {
     return this.storage.presignGet(key, expiresIn)
   }
-  /* ───────────────── Delete ───────────────── */
 
-  async deleteAsset(
-    assetId: string,
-    ownerId: string,
-  ): Promise<{ message: string }> {
+  /* ─────────────────────────────────────────────────────────────────────────
+   * DELETE
+   * ─────────────────────────────────────────────────────────────────────── */
 
-    const asset =
-      await this.prisma.media_assets.findFirst({
-        where: {
-          id: assetId,
-          uploader_id: ownerId,
-        },
-
-        select: {
-          id: true,
-          file_key: true,
-          webp_key: true,
-          thumb_key: true,
-        },
-      })
-
-    if (!asset)
-      throw new NotFoundException(
-        'Asset not found',
-      )
-
-    const keysToDelete = [
-
-      asset.file_key,
-
-      asset.webp_key,
-
-      asset.thumb_key,
-
-    ].filter(Boolean) as string[]
-
-    await Promise.allSettled(
-      keysToDelete.map(k =>
-        this.storage.delete(k),
-      ),
-    )
-
-    await this.prisma.media_assets.delete({
-      where: { id: assetId },
+  async deleteAsset(assetId: string, ownerId: string): Promise<{ message: string }> {
+    const asset = await this.prisma.media_assets.findFirst({
+      where:  { id: assetId, uploader_id: ownerId },
+      select: { id: true, file_key: true, webp_key: true, thumb_key: true },
     })
 
-    const venueId =
-      asset.file_key.split('/')[1]
+    if (!asset) throw new NotFoundException('Asset not found')
 
-    if (venueId) {
+    // Delete all R2 variants in parallel — allSettled so a missing webp/thumb doesn't abort
+    await Promise.allSettled(
+      ([asset.file_key, asset.webp_key, asset.thumb_key].filter(Boolean) as string[])
+        .map(k => this.storage.delete(k)),
+    )
 
-      void this.redis.del(
-        `media:gallery:${venueId}`,
-      )
+    await this.prisma.media_assets.delete({ where: { id: assetId } })
+
+    // Invalidate gallery cache only if this was a gallery asset
+    // (avoids pointless Redis DEL calls for avatar/kyc/cover deletes)
+    if (asset.file_key.includes('/gallery/')) {
+      const venueId = asset.file_key.split('/')[1]
+      if (venueId) void this.redis.del(`media:gallery:${venueId}`)
     }
+
+    // Invalidate status cache
+    void this.redis.del(`media:status:${assetId}`)
 
     return { message: 'Asset deleted' }
   }
 
-  /* ───────────────── Ownership ───────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+   * OWNERSHIP VALIDATION
+   * ─────────────────────────────────────────────────────────────────────── */
 
-  private async validateOwnership(
-    opts: RequestUploadUrlOptions,
-  ): Promise<void> {
-
-    // 1. Enforce uploader referential integrity (Service-Layer FK check)
-    const uploaderType = opts.assetType === 'player_profile' ? 'USER' : 'OWNER'
-
-    if (uploaderType === 'USER') {
-      const user = await this.prisma.users.findUnique({
-        where: { id: opts.ownerId },
-        select: { id: true },
-      })
-      if (!user) throw new ForbiddenException('Uploader user not found')
-    } else if (uploaderType === 'OWNER') {
-      const owner = await this.prisma.owners.findUnique({
-        where: { id: opts.ownerId },
-        select: { id: true },
-      })
-      if (!owner) throw new ForbiddenException('Uploader owner not found')
-    }
-
-    // 2. Enforce domain entity ownership
+  private async validateOwnership(opts: RequestUploadUrlOptions): Promise<void> {
     switch (opts.assetType) {
 
-      case 'player_profile':
-      case 'owner_profile':
-      case 'kyc_document':
-
-        if (
-          opts.entityId !==
-          opts.ownerId
-        ) {
-
-          throw new ForbiddenException(
-            'You can only upload to your own media folder',
-          )
-        }
-
+      // ── Personal assets: entityId must match the caller ────────────────────
+      case 'player_profile': {
+        if (opts.entityId !== opts.ownerId) throw new ForbiddenException('You can only upload to your own media folder')
+        const user = await this.prisma.users.findUnique({ where: { id: opts.ownerId }, select: { id: true } })
+        if (!user) throw new ForbiddenException('Uploader user not found')
         return
+      }
 
+      case 'owner_profile':
+      case 'kyc_document': {
+        if (opts.entityId !== opts.ownerId) throw new ForbiddenException('You can only upload to your own media folder')
+        // Owner existence is implicitly guaranteed by the JWT guard upstream —
+        // no extra DB query needed here.
+        return
+      }
+
+      // ── Venue assets: one query proves both ownership AND venue existence ───
+      // PERF FIX: removed the separate owner existence check that ran before this.
+      // The venue query WHERE id = entityId AND owner_id = ownerId is sufficient:
+      // if it returns a row, the owner exists and owns that venue.
       case 'venue_cover':
       case 'venue_gallery':
       case 'venue_verification': {
-
-        const venue =
-          await this.prisma.venues.findFirst({
-            where: {
-              id: opts.entityId,
-              owner_id: opts.ownerId,
-            },
-
-            select: { id: true },
-          })
-
-        if (!venue) {
-
-          throw new ForbiddenException(
-            'Venue not found or access denied',
-          )
-        }
-
+        const venue = await this.prisma.venues.findFirst({
+          where:  { id: opts.entityId, owner_id: opts.ownerId, deleted_at: null },
+          select: { id: true },
+        })
+        if (!venue) throw new ForbiddenException('Venue not found or access denied')
         return
       }
 
       default:
-        throw new BadRequestException(
-          `Unknown assetType: ${opts.assetType}`,
-        )
+        throw new BadRequestException(`Unknown assetType: ${opts.assetType}`)
     }
   }
 }

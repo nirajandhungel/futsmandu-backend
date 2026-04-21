@@ -270,7 +270,7 @@ model users {
   invited_match_members match_group_members[]     @relation("InvitedBy")
   email_otps            email_verification_otps[] @relation("PlayerOtps")
   created_invite_tokens invite_tokens[]           @relation("InviteTokenCreator")
-  media_assets          media_assets[]
+
   user_avatar_media     user_avatars[]
   match_media           match_media[]             @relation("Uploader")
 
@@ -846,11 +846,6 @@ model media_assets {
   created_at    DateTime         @default(now()) @db.Timestamptz(6)
   updated_at    DateTime         @updatedAt @db.Timestamptz(6)
   deleted_at    DateTime?        @db.Timestamptz(6)
-
-  // Back-relation for USER uploaders only. Admin/owner uploads resolved via uploader_type in service layer.
-  uploader_user users?           @relation(fields: [uploader_id], references: [id], onDelete: Restrict, map: "media_uploader_user_fk")
-  // NOTE: uploader_owner Prisma relation removed — two FKs cannot share the same uploader_id column.
-  // Access owner uploads via raw uploader_id + uploader_type in service layer.
 
   // Domain links
   owner_kyc_documents owner_kyc_documents[]

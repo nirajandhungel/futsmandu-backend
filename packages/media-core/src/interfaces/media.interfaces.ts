@@ -10,7 +10,7 @@ export type AssetType =
   | 'venue_verification'
   | 'kyc_document'
 
-export type AssetStatus = 'pending' | 'processing' | 'ready' | 'failed'
+export type AssetStatus = 'pending' | 'processing' | 'completed' | 'failed'
 
 export type KycDocType =
   | 'citizenship'
@@ -107,7 +107,14 @@ export interface UploadStatusResult {
   progress:  number       // 0-100
   webpKey?:  string | null
   thumbKey?: string | null
-  /** CDN URL of the thumb — populated once processing is done */
-  thumbUrl?: string | null
+  // Fully built CDN URLs — use these in Flutter, not the raw keys
+  cdnUrl?:   string          // original file CDN URL (available immediately after confirm)
+  webpUrl?:  string | null   // WebP variant URL (null until processing completes)
+  thumbUrl?: string | null   // Thumbnail URL (null until processing completes)
+  /**
+   * Presigned download URL — ONLY set for private assets (KYC / verification docs)
+   * when status = completed. Expires in 600 seconds. Use to display the uploaded image.
+   */
+  signedUrl?: string | null
   error?:    string
 }
