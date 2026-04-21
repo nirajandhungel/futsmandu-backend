@@ -1,11 +1,11 @@
-// apps/owner-admin-api/src/modules/bookings/bookings.controller.ts
+// apps/api-owner/src/modules/bookings/bookings.controller.ts
 import {
   Controller, Get, Post, Put, Body, Param, Query, UseGuards,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger'
 import { BookingsService } from './bookings.service.js'
 import {
-  CalendarQueryDto, CreateOfflineBookingDto,
+  CreateOfflineBookingDto,
   ListBookingsQueryDto, MarkAttendanceDto,
 } from './dto/booking.dto.js'
 import { OwnerJwtGuard } from '../../common/guards/owner-jwt.guard.js'
@@ -20,15 +20,8 @@ import type { AuthOwner } from '../../common/guards/owner-jwt.guard.js'
 export class BookingsController {
   constructor(private readonly bookings: BookingsService) {}
 
-  @Get('courts/:id/calendar')
-  @ApiOperation({ summary: 'Slot calendar for a court on a date' })
-  calendar(
-    @CurrentOwner() owner: AuthOwner,
-    @Param('id') courtId: string,
-    @Query() query: CalendarQueryDto,
-  ) {
-    return this.bookings.getCalendar(owner.id, courtId, query.date)
-  }
+  // Calendar removed — use GET /courts/:courtId/calendar (CourtsService)
+  // That endpoint includes Redis holds, player names, bookingId, and pricing.
 
   @Post('offline')
   @ApiOperation({ summary: 'Create walk-in offline booking' })

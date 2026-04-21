@@ -25,12 +25,9 @@ export const ENV = {
   ADMIN_DB_POOL_SIZE:     process.env['ADMIN_DB_POOL_SIZE']    ?? '2',
   WORKER_DB_POOL_SIZE:    process.env['WORKER_DB_POOL_SIZE']   ?? '1',
 
-  // ── Redis — Upstash ioredis ONLY (rediss://) ────────────────────────────────
+  // ── Redis ────────────────────────────────
   // This is the single, canonical Redis connection used by every service.
-  // REDIS_URL (local/plaintext) and UPSTASH_REDIS_REST_* are intentionally removed:
-  //   • REDIS_URL   — no local Redis exists in production; accepting it is a footgun.
-  //   • REST vars   — the REST Upstash client is not instantiated anywhere in this codebase.
-  UPSTASH_REDIS_IOREDIS_URL: process.env['UPSTASH_REDIS_IOREDIS_URL'] as string,
+  REDIS_URL: process.env['REDIS_URL'] as string,
 
   // ── JWT — one secret per service ────────────────────────────────────────────
   PLAYER_JWT_SECRET: process.env['PLAYER_JWT_SECRET'] as string,
@@ -99,7 +96,7 @@ type EnvKey = keyof typeof ENV
 const ALWAYS_REQUIRED: EnvKey[] = [
   'DATABASE_URL',
   'DIRECT_DATABASE_URL',
-  'UPSTASH_REDIS_IOREDIS_URL',
+  'REDIS_URL',
 ]
 
 /** Additional keys required only in production. */
@@ -115,15 +112,6 @@ export function validateENV(serviceKeys: EnvKey[] = []): void {
       `[ENV] FATAL — missing required environment variables:\n` +
       missing.map(k => `  • ${k}`).join('\n') + '\n' +
       'Copy .env.example → .env and fill in all values.',
-    )
-    process.exit(1)
-  }
-
-  // Upstash requires TLS — catch accidental plaintext URLs early.
-  if (!ENV.UPSTASH_REDIS_IOREDIS_URL.startsWith('rediss://')) {
-    console.error(
-      '[ENV] FATAL — UPSTASH_REDIS_IOREDIS_URL must start with rediss:// ' +
-      '(Upstash requires TLS). Got: ' + ENV.UPSTASH_REDIS_IOREDIS_URL.slice(0, 20) + '...',
     )
     process.exit(1)
   }

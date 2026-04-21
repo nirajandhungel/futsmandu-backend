@@ -213,10 +213,10 @@ export class RedisService implements OnModuleDestroy {
   } as const
 
   constructor() {
-    // ENV.UPSTASH_REDIS_IOREDIS_URL is guaranteed non-null here because
+    // ENV.REDIS_URL is guaranteed non-null here because
     // validateENV() runs in each service's bootstrap() before NestJS
     // initialises any module — a missing URL causes process.exit(1) first.
-    const redisUrl = ENV.UPSTASH_REDIS_IOREDIS_URL
+    const redisUrl = ENV.REDIS_URL
 
     if (RedisService.shared) {
       this.client = RedisService.shared.client
