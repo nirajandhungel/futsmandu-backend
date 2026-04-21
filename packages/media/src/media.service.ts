@@ -19,6 +19,9 @@ import {
   media_asset_type,
   media_status,
   actor_type,
+  owner_kyc_type,
+  kyc_status,
+  venue_media_type,
 } from '@futsmandu/database'
 import { StorageService } from '@futsmandu/media-storage'
 import { RedisService } from '@futsmandu/redis'
@@ -179,19 +182,21 @@ export class MediaService {
   async confirmUpload(opts: ConfirmUploadOptions): Promise<ConfirmUploadResult> {
     const asset = await this.prisma.media_assets.findFirst({
       where:  { id: opts.assetId, uploader_id: opts.ownerId },
-      select: { id: true, status: true, file_key: true },
+      select: { id: true, status: true, file_key: true, asset_type: true, metadata: true },
     })
 
     if (!asset) throw new NotFoundException('Asset not found')
 
     if (asset.file_key !== opts.key) throw new BadRequestException('Key mismatch')
 
-    // Idempotent — already confirmed, return current state immediately
+    // Idempotent — already confirmed, return current real DB status
     if (asset.status !== media_status.pending) {
       return {
         message:  'Already confirmed',
         assetId:  asset.id,
-        cdnUrl:   this.storage.cdnUrl(this.cdnBase, asset.file_key),
+        cdnUrl:   this.isPublicAsset(opts.assetType)
+          ? this.storage.cdnUrl(this.cdnBase, asset.file_key)
+          : undefined,
         webpKey:  predictWebpKey(asset.file_key),
         thumbKey: predictThumbKey(asset.file_key),
         status:   asset.status as AssetStatus,
@@ -217,9 +222,52 @@ export class MediaService {
       this.logger.warn(`[${opts.assetId}] Magic check failed — continuing`)
     }
 
+    const meta     = (asset.metadata ?? {}) as Record<string, string>
+    const entityId = meta['entityId'] ?? opts.ownerId
+
+    /* ── KYC / verification docs ─────────────────────────────────────────────
+     * These asset types need ZERO image processing — the raw file is used as-is.
+     * Skip BullMQ entirely: mark completed inline so the client sees status=completed
+     * on the very NEXT poll (< 100 ms) instead of waiting 1-2 min for a worker.
+     * ─────────────────────────────────────────────────────────────────────── */
+    if (opts.assetType === 'kyc_document' || opts.assetType === 'venue_verification') {
+      const [updatedAsset] = await Promise.all([
+        this.prisma.media_assets.update({
+          where:  { id: opts.assetId },
+          data:   { status: media_status.completed, updated_at: new Date() },
+          select: { id: true, file_key: true },
+        }),
+
+        // Domain link (owner_kyc_documents row) — fire-and-forget, microseconds
+        this.writeDomainLink(
+          opts.assetType,
+          opts.assetId,
+          asset.asset_type,
+          opts.ownerId,
+          entityId,
+          asset.file_key,
+        ).catch(e => this.logger.error(`[${opts.assetId}] Domain link write failed: ${e?.message}`)),
+
+        // Bust status cache so next poll immediately sees 'completed'
+        this.redis.del(`media:status:${opts.assetId}`).catch(() => {}),
+      ])
+
+      this.logger.log(`[${opts.assetId}] ${opts.assetType} confirmed inline (no processing needed)`)
+
+      return {
+        message:  'Upload confirmed — ready',
+        assetId:  updatedAsset.id,
+        cdnUrl:   undefined, // private asset — use presigned URL via getUploadStatus
+        webpKey:  null,
+        thumbKey: null,
+        status:   'completed',
+      }
+    }
+
+    /* ── Image assets — queue for sharp processing ────────────────────────── */
     const { width, height } = getResizeDimensions(opts.assetType)
 
-    // DB update + queue add — in parallel
+    // DB update + queue add + domain link write — all in parallel
     const [updatedAsset] = await Promise.all([
       this.prisma.media_assets.update({
         where:  { id: opts.assetId },
@@ -238,13 +286,25 @@ export class MediaService {
           targetHeight: height,
         },
         {
-          priority:         opts.assetType.startsWith('venue') ? 1 : 5,
+          // Venue uploads are slightly lower priority than avatar uploads
+          priority:         opts.assetType.startsWith('venue') ? 2 : 1,
           attempts:         3,
-          backoff:          { type: 'exponential', delay: 2000 },
+          // backoff only applies to RETRIES — first attempt starts immediately
+          backoff:          { type: 'exponential', delay: 5_000 },
           removeOnComplete: { count: 200 },
           removeOnFail:     { count: 500 },
         },
       ),
+
+      // Write domain link row — index-driven, microseconds
+      this.writeDomainLink(
+        opts.assetType,
+        opts.assetId,
+        asset.asset_type,
+        opts.ownerId,
+        entityId,
+        asset.file_key,
+      ).catch(e => this.logger.error(`[${opts.assetId}] Domain link write failed: ${e?.message}`)),
     ])
 
     return {
@@ -256,6 +316,111 @@ export class MediaService {
       webpKey:  null,
       thumbKey: null,
       status:   'processing',
+    }
+  }
+
+  /* ─────────────────────────────────────────────────────────────────────────
+   * DOMAIN LINK WRITER
+   * Writes/updates the correct link table row each time an upload is confirmed.
+   * Runs in parallel with the BullMQ queue add — zero extra latency on reads.
+   * ─────────────────────────────────────────────────────────────────────── */
+
+  // Maps media_asset_type → owner_kyc_type (only KYC asset types are present)
+  private static readonly KYC_TYPE_MAP: Partial<Record<media_asset_type, owner_kyc_type>> = {
+    [media_asset_type.OWNER_CITIZENSHIP]:           owner_kyc_type.CITIZENSHIP,
+    [media_asset_type.OWNER_BUSINESS_REGISTRATION]: owner_kyc_type.BUSINESS_REGISTRATION,
+    [media_asset_type.OWNER_PAN]:                   owner_kyc_type.PAN,
+  }
+
+  private async writeDomainLink(
+    assetType:   string,
+    mediaId:     string,
+    dbAssetType: media_asset_type,
+    ownerId:     string,
+    entityId:    string,
+    fileKey:     string,
+  ): Promise<void> {
+    switch (assetType) {
+
+      // ── KYC document → owner_kyc_documents ──────────────────────────────
+      case 'kyc_document': {
+        const kycType = MediaService.KYC_TYPE_MAP[dbAssetType]
+        if (!kycType) return
+
+        // find existing row for this owner+type (indexed → fast)
+        const existing = await this.prisma.owner_kyc_documents.findFirst({
+          where:  { owner_id: ownerId, type: kycType },
+          select: { id: true },
+        })
+
+        if (existing) {
+          // Re-upload: swap media, reset back to PENDING so admin re-reviews
+          await this.prisma.owner_kyc_documents.update({
+            where: { id: existing.id },
+            data:  {
+              media_id:         mediaId,
+              status:           kyc_status.PENDING,
+              verified_by:      null,
+              verified_at:      null,
+              rejection_reason: null,
+            },
+          })
+        } else {
+          await this.prisma.owner_kyc_documents.create({
+            data: { owner_id: ownerId, type: kycType, media_id: mediaId },
+          })
+        }
+        return
+      }
+
+      // ── Venue cover → venue_media (COVER) + venues cache ────────────────
+      case 'venue_cover': {
+        const cdnUrl = this.storage.cdnUrl(this.cdnBase, fileKey)
+        const existing = await this.prisma.venue_media.findFirst({
+          where:  { venue_id: entityId, type: venue_media_type.COVER },
+          select: { id: true },
+        })
+        await Promise.all([
+          existing
+            ? this.prisma.venue_media.update({ where: { id: existing.id }, data: { media_id: mediaId } })
+            : this.prisma.venue_media.create({ data: { venue_id: entityId, media_id: mediaId, type: venue_media_type.COVER } }),
+          // Keep denormalized cover_image_url in sync — fast reads on discovery/listing
+          this.prisma.venues.update({
+            where: { id: entityId },
+            data:  { cover_image_url: cdnUrl, updated_at: new Date() },
+          }),
+        ])
+        return
+      }
+
+      // ── Venue gallery → venue_media (GALLERY) ───────────────────────────
+      case 'venue_gallery': {
+        await this.prisma.venue_media.create({
+          data: { venue_id: entityId, media_id: mediaId, type: venue_media_type.GALLERY },
+        })
+        // Bust gallery Redis cache so next read is fresh
+        void this.redis.del(`media:gallery:${entityId}`)
+        return
+      }
+
+      // ── Player avatar → user_avatars ────────────────────────────────────
+      case 'player_profile': {
+        // Deactivate previous avatar, create new active one — two indexed writes
+        await this.prisma.$transaction([
+          this.prisma.user_avatars.updateMany({
+            where: { user_id: entityId, is_active: true },
+            data:  { is_active: false },
+          }),
+          this.prisma.user_avatars.create({
+            data: { user_id: entityId, media_id: mediaId, is_active: true },
+          }),
+        ])
+        return
+      }
+
+      // ── owner_profile / venue_verification → no separate link table ──────
+      default:
+        return
     }
   }
 
