@@ -17,6 +17,7 @@ import { QueuesModule } from '@futsmandu/queues'
 import { IpWhitelistMiddleware }   from './common/middleware/ip-whitelist.middleware.js'
 import { AdminAuthModule }         from './modules/auth/auth.module.js'
 import { AdminUsersModule }        from './modules/players/players.module.js'
+import { AdminOwnersModule }       from './modules/owners/admin-owners.module.js'
 import { AdminVenuesModule }       from './modules/venues/admin-venues.module.js'
 import { AdminBookingModule }      from './modules/booking/admin-booking.module.js'
 import { AdminPenaltiesModule }    from './modules/penalties/penalties.module.js'
@@ -54,6 +55,7 @@ import { ENV } from '@futsmandu/utils'
 
     AdminAuthModule,
     AdminUsersModule,
+    AdminOwnersModule,
     AdminVenuesModule,
     AdminBookingModule,
     AdminPenaltiesModule,
