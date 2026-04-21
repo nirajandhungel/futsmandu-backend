@@ -249,7 +249,8 @@ export class MediaService {
         ).catch(e => this.logger.error(`[${opts.assetId}] Domain link write failed: ${e?.message}`)),
 
         // Bust status cache so next poll immediately sees 'completed'
-        this.redis.del(`media:status:${opts.assetId}`).catch(() => {}),
+        // void = true fire-and-forget (no hidden .catch micro-task overhead)
+        void this.redis.del(`media:status:${opts.assetId}`),
       ])
 
       this.logger.log(`[${opts.assetId}] ${opts.assetType} confirmed inline (no processing needed)`)
@@ -347,43 +348,32 @@ export class MediaService {
         const kycType = MediaService.KYC_TYPE_MAP[dbAssetType]
         if (!kycType) return
 
-        // find existing row for this owner+type (indexed → fast)
-        const existing = await this.prisma.owner_kyc_documents.findFirst({
-          where:  { owner_id: ownerId, type: kycType },
-          select: { id: true },
+        // Single upsert on @@unique([owner_id, type]) — 1 DB round-trip instead of 2
+        // Re-upload path: swaps media and resets status → PENDING so admin re-reviews
+        await this.prisma.owner_kyc_documents.upsert({
+          where:  { owner_id_type: { owner_id: ownerId, type: kycType } },
+          create: { owner_id: ownerId, type: kycType, media_id: mediaId },
+          update: {
+            media_id:         mediaId,
+            status:           kyc_status.PENDING,
+            verified_by:      null,
+            verified_at:      null,
+            rejection_reason: null,
+          },
         })
-
-        if (existing) {
-          // Re-upload: swap media, reset back to PENDING so admin re-reviews
-          await this.prisma.owner_kyc_documents.update({
-            where: { id: existing.id },
-            data:  {
-              media_id:         mediaId,
-              status:           kyc_status.PENDING,
-              verified_by:      null,
-              verified_at:      null,
-              rejection_reason: null,
-            },
-          })
-        } else {
-          await this.prisma.owner_kyc_documents.create({
-            data: { owner_id: ownerId, type: kycType, media_id: mediaId },
-          })
-        }
         return
       }
 
       // ── Venue cover → venue_media (COVER) + venues cache ────────────────
       case 'venue_cover': {
         const cdnUrl = this.storage.cdnUrl(this.cdnBase, fileKey)
-        const existing = await this.prisma.venue_media.findFirst({
-          where:  { venue_id: entityId, type: venue_media_type.COVER },
-          select: { id: true },
-        })
+        // Single upsert on @@unique([venue_id, type]) — 1 DB round-trip instead of 2
         await Promise.all([
-          existing
-            ? this.prisma.venue_media.update({ where: { id: existing.id }, data: { media_id: mediaId } })
-            : this.prisma.venue_media.create({ data: { venue_id: entityId, media_id: mediaId, type: venue_media_type.COVER } }),
+          this.prisma.venue_media.upsert({
+            where:  { venue_media_venue_id_type_key: { venue_id: entityId, type: venue_media_type.COVER } },
+            create: { venue_id: entityId, media_id: mediaId, type: venue_media_type.COVER },
+            update: { media_id: mediaId },
+          }),
           // Keep denormalized cover_image_url in sync — fast reads on discovery/listing
           this.prisma.venues.update({
             where: { id: entityId },

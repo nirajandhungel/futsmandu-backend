@@ -893,6 +893,7 @@ model owner_kyc_documents {
   media            media_assets  @relation(fields: [media_id], references: [id], onDelete: Restrict)
   verifier         admins?       @relation(fields: [verified_by], references: [id], onDelete: SetNull)
 
+  @@unique([owner_id, type])   // one row per doc-type per owner — enables upsert
   @@index([owner_id])
   @@index([type, status])
 }
@@ -908,6 +909,7 @@ model venue_media {
   venue         venues           @relation(fields: [venue_id], references: [id], onDelete: Restrict)
   media         media_assets     @relation(fields: [media_id], references: [id], onDelete: Restrict)
 
+  @@unique([venue_id, type], name: "venue_media_venue_id_type_key") // enables upsert for COVER slot
   @@index([venue_id, type])
 }
 
