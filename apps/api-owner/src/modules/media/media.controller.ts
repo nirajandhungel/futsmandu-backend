@@ -23,7 +23,26 @@ import {
 export class MediaController {
   constructor(private readonly media: MediaService) {}
 
-  // ── Confirm + Status (shared step 2 & 3 for all asset types) ─────────────
+
+  // ── KYC ───────────────────────────────────────────────────────────────────
+
+  @Post('kyc/upload-url')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Step 1 — Get presigned URL for KYC document' })
+  requestKycUploadUrl(
+    @CurrentOwner() owner: { id: string },
+    @Body() dto: OwnerKycUploadUrlDto,
+  ) {
+    return this.media.requestUploadUrl({
+      assetType:   'kyc_document',
+      ownerId:     owner.id,
+      entityId:    owner.id,
+      docType:     dto.docType,
+      contentType: dto.contentType,
+    })
+  }
+
+    // ── Confirm + Status (shared step 2 & 3 for all asset types) ─────────────
 
   @Post('confirm-upload')
   @ApiOperation({
@@ -56,24 +75,6 @@ export class MediaController {
     @Param('assetId', ParseUUIDPipe) assetId: string,
   ) {
     return this.media.getUploadStatus(assetId, owner.id)
-  }
-
-  // ── KYC ───────────────────────────────────────────────────────────────────
-
-  @Post('kyc/upload-url')
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @ApiOperation({ summary: 'Step 1 — Get presigned URL for KYC document' })
-  requestKycUploadUrl(
-    @CurrentOwner() owner: { id: string },
-    @Body() dto: OwnerKycUploadUrlDto,
-  ) {
-    return this.media.requestUploadUrl({
-      assetType:   'kyc_document',
-      ownerId:     owner.id,
-      entityId:    owner.id,
-      docType:     dto.docType,
-      contentType: dto.contentType,
-    })
   }
 
   @Get('kyc')
