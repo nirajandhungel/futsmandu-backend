@@ -45,6 +45,7 @@ export class AdminVenuesService {
       this.prisma.venues.findMany({
         select: {
           id: true, name: true, slug: true, is_verified: true, is_active: true,
+          cover_image_url: true,
           avg_rating: true, total_reviews: true, amenities: true, created_at: true,
           owner: { select: { id: true, name: true, email: true } },
         },
@@ -55,7 +56,19 @@ export class AdminVenuesService {
       this.prisma.venues.count({
       })
     ])
-    return { data: venues, meta: { page, total } }
+
+    const enriched = await Promise.all(
+      venues.map(async (v: typeof venues[number]) => {
+        const cover_image_signed_url = v.cover_image_url
+          ? await this.media.getImageUrl(
+            extractKeyFromCdnUrl(v.cover_image_url),
+          ).catch(() => null)
+          : null
+        return { ...v, cover_image_signed_url }
+      }),
+    )
+
+    return { data: enriched, meta: { page, total } }
   }
   
   async listPendingVenues(page = 1) {
