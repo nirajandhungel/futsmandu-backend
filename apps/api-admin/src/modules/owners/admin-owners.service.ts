@@ -12,7 +12,7 @@ export class AdminOwnersService {
     private readonly prisma: PrismaService,
     private readonly media: MediaService,
     @InjectQueue('admin-emails') private readonly emailQueue: Queue,
-  ) {}
+  ) { }
 
   async listAllOwners(page = 1, search?: string, isActive?: boolean, isKycApproved?: boolean) {
     const PAGE_SIZE = 20
@@ -48,36 +48,57 @@ export class AdminOwnersService {
   }
 
   async getOwnerDetails(ownerId: string) {
-    const owner = await this.prisma.owners.findUnique({
-      where: { id: ownerId },
-      include: {
-        venues: {
-          select: { id: true, name: true, is_active: true, is_verified: true, created_at: true },
+    const [owner, payouts] = await Promise.all([
+      this.prisma.owners.findUnique({
+        where: { id: ownerId },
+        include: {
+          venues: {
+            select: {
+              id: true,
+              name: true,
+              is_active: true,
+              is_verified: true,
+              created_at: true,
+            },
+          },
+          _count: {
+            select: {
+              created_bookings: true,
+              payouts: true,
+            },
+          },
         },
-        _count: { select: { created_bookings: true, payouts: true } },
-      },
-    })
+      }),
+
+      this.prisma.owner_payouts.aggregate({
+        where: { owner_id: ownerId, status: 'SUCCESS' },
+        _sum: { owner_amount: true },
+      }),
+    ])
+
     if (!owner) throw new NotFoundException('Owner not found')
 
-    const payouts = await this.prisma.owner_payouts.aggregate({
-      where: { owner_id: ownerId, status: 'SUCCESS' },
-      _sum: { owner_amount: true },
-    })
-
-    return { ...owner, total_revenue: payouts._sum.owner_amount || 0 }
+    return {
+      ...owner,
+      total_revenue: payouts._sum.owner_amount || 0,
+    }
   }
 
   async updateOwnerStatus(ownerId: string, isActive: boolean) {
-    const owner = await this.prisma.owners.findUnique({ where: { id: ownerId } })
-    if (!owner) throw new NotFoundException('Owner not found')
-
-    const updated = await this.prisma.owners.update({
+    const result = await this.prisma.owners.updateMany({
       where: { id: ownerId },
-      data: { is_active: isActive, updated_at: new Date() },
+      data: {
+        is_active: isActive,
+        updated_at: new Date(),
+      },
     })
 
+    if (result.count === 0) {
+      throw new NotFoundException('Owner not found')
+    }
+
     this.logger.log(`Owner ${ownerId} status changed to active=${isActive}`)
-    return updated
+    return { ownerId, isActive }
   }
 
   async getKycDocuments(ownerId: string) {
