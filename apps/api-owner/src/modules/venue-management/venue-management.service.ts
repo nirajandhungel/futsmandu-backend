@@ -268,41 +268,49 @@ export class VenueManagementService {
       ownerId,
     )
 
-    return this.prisma.courts.create({
-      data: {
-        venue_id: venueId,
+    return this.prisma.$transaction(async (tx: any) => {
+      const court = await tx.courts.create({
+        data: {
+          venue_id: venueId,
+          name: dto.name,
+          court_type: dto.court_type ?? '5v5',
+          surface: dto.surface ?? 'turf',
+          capacity: dto.capacity ?? 10,
+          min_players: dto.min_players ?? 4,
+          slot_duration_mins: dto.slot_duration_mins ?? 60,
+          open_time: dto.open_time ?? '06:00',
+          close_time: dto.close_time ?? '22:00',
+        },
+        select: {
+          id: true,
+          name: true,
+          court_type: true,
+          slot_duration_mins: true,
+          created_at: true,
+        },
+      })
 
-        name: dto.name,
+      await tx.pricing_rules.create({
+        data: {
+          court_id: court.id,
+          rule_type: 'base',
+          priority: 1,
+          price: dto.base_price,
+          modifier: 'fixed',
+          days_of_week: [],
+          start_time: null,
+          end_time: null,
+          date_from: null,
+          date_to: null,
+          hours_before: null,
+          is_active: true,
+        },
+      })
 
-        court_type:
-          dto.court_type ?? '5v5',
-
-        surface:
-          dto.surface ?? 'turf',
-
-        capacity:
-          dto.capacity ?? 10,
-
-        min_players:
-          dto.min_players ?? 4,
-
-        slot_duration_mins:
-          dto.slot_duration_mins ?? 60,
-
-        open_time:
-          dto.open_time ?? '06:00',
-
-        close_time:
-          dto.close_time ?? '22:00',
-      },
-
-      select: {
-        id: true,
-        name: true,
-        court_type: true,
-        slot_duration_mins: true,
-        created_at: true,
-      },
+      return {
+        ...court,
+        base_price: dto.base_price,
+      }
     })
   }
 
