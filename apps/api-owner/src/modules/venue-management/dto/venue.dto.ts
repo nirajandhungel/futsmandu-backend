@@ -149,6 +149,11 @@ export class CreateCourtDto {
   @IsOptional() @IsNumber() @Min(30) @Max(180)
   slot_duration_mins?: number
 
+  @ApiProperty({ description: 'Mandatory default/base price in paisa for all regular slots unless overridden by special pricing rules', example: 120000 })
+  @IsNumber()
+  @Min(100)
+  base_price!: number
+
   // SEC-7: Validates HH:MM format for court operating hours
   @ApiPropertyOptional({ example: '06:00' })
   @IsOptional()
