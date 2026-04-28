@@ -156,18 +156,21 @@ export class PaymentService {
   ) { }
 
   async initiateKhalti(bookingId: string, playerId: string) {
-    const payment = await this.bookingService.initiatePayment(bookingId, 'KHALTI', playerId)
     const booking = await this.prisma.bookings.findUnique({
       where: { id: bookingId },
-      select: { total_amount: true },
+      select: { id: true, player_id: true, total_amount: true, status: true, payment: { select: { id: true, status: true } } },
     })
     if (!booking) throw new NotFoundException('Booking not found')
-    const result = await khaltiInitiate(bookingId, booking.total_amount)
-    await this.prisma.payments.update({
-      where: { id: payment.id },
-      data: { gateway_tx_id: result.pidx },
-    })
-    return result
+    if (booking.player_id !== playerId) throw new ConflictException('Not your booking')
+    return {
+      paymentDisabled: true,
+      message: 'Player payment is temporarily disabled. Booking is confirmed directly during booking.',
+      bookingId: booking.id,
+      bookingStatus: booking.status,
+      amount: booking.total_amount,
+      paymentId: booking.payment?.id ?? null,
+      paymentStatus: booking.payment?.status ?? null,
+    }
   }
 
   async verifyKhalti(pidx: string, bookingId: string) {
@@ -191,13 +194,21 @@ export class PaymentService {
   }
 
   async initiateEsewa(bookingId: string, playerId: string) {
-    await this.bookingService.initiatePayment(bookingId, 'ESEWA', playerId)
     const booking = await this.prisma.bookings.findUnique({
       where: { id: bookingId },
-      select: { total_amount: true },
+      select: { id: true, player_id: true, total_amount: true, status: true, payment: { select: { id: true, status: true } } },
     })
     if (!booking) throw new NotFoundException('Booking not found')
-    return esewaInitiate(bookingId, booking.total_amount)
+    if (booking.player_id !== playerId) throw new ConflictException('Not your booking')
+    return {
+      paymentDisabled: true,
+      message: 'Player payment is temporarily disabled. Booking is confirmed directly during booking.',
+      bookingId: booking.id,
+      bookingStatus: booking.status,
+      amount: booking.total_amount,
+      paymentId: booking.payment?.id ?? null,
+      paymentStatus: booking.payment?.status ?? null,
+    }
   }
 
   async verifyEsewa(encodedData: string) {
