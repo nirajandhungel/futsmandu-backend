@@ -20,33 +20,34 @@ export class PaymentController {
 
   @Post('khalti-initiate')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Initiate Khalti payment — returns payment_url' })
+  @ApiOperation({ summary: 'Khalti initiation endpoint; currently disabled for player flow' })
   khaltiInitiate(@Body() dto: KhaltiInitiateDto, @CurrentUser() user: AuthenticatedUser) {
     return this.paymentService.initiateKhalti(dto.bookingId, user.id)
   }
 
   @Post('khalti-verify')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Verify Khalti callback — server-side amount validation + confirm booking' })
+  @ApiOperation({ summary: 'Verify Khalti callback for legacy/manual payment flows' })
   khaltiVerify(@Body() dto: KhaltiVerifyDto) {
     return this.paymentService.verifyKhalti(dto.pidx, dto.bookingId)
   }
 
   @Post('esewa-initiate')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Initiate eSewa payment — returns HMAC-signed payload' })
+  @ApiOperation({ summary: 'eSewa initiation endpoint; currently disabled for player flow' })
   esewaInitiate(@Body() dto: EsewaInitiateDto, @CurrentUser() user: AuthenticatedUser) {
     return this.paymentService.initiateEsewa(dto.bookingId, user.id)
   }
 
   @Post('esewa-verify')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Verify eSewa callback — HMAC check + confirm booking' })
+  @ApiOperation({ summary: 'Verify eSewa callback for legacy/manual payment flows' })
   esewaVerify(@Body() dto: EsewaVerifyDto) {
     return this.paymentService.verifyEsewa(dto.data)
   }
 
   @Get('history')
+  @ApiOperation({ summary: 'Get payment history for the current player' })
   async history(@CurrentUser() user: AuthenticatedUser) {
     const payments = await this.prisma.payments.findMany({
       where: { player_id: user.id },
