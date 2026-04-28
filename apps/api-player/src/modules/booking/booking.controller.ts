@@ -53,7 +53,7 @@ export class BookingController {
   // POST /bookings/hold
   @Post('bookings/hold')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Hold a slot (advisory lock + SERIALIZABLE transaction)' })
+  @ApiOperation({ summary: 'Create player booking directly; confirms booking and stores successful payment record' })
   holdSlot(@CurrentUser() user: AuthenticatedUser, @Body() dto: HoldSlotDto) {
     return this.bookingService.holdSlot(user.id, dto)
   }
@@ -61,7 +61,7 @@ export class BookingController {
   // POST /bookings/:id/join
   @Post('bookings/:id/join')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Join an open slot in an existing booking' })
+  @ApiOperation({ summary: 'Join an open player booking slot' })
   joinBookingSlot(@Param('id', ParseUUIDPipe) bookingId: string, @CurrentUser() user: AuthenticatedUser) {
     return this.bookingService.joinBookingSlot(bookingId, user.id)
   }
@@ -69,7 +69,7 @@ export class BookingController {
   // GET /bookings
   // SEC-2: Typed DTO with @Type(() => Number) prevents string arithmetic bugs
   @Get('bookings')
-  @ApiOperation({ summary: 'Paginated booking history' })
+  @ApiOperation({ summary: 'Get paginated booking history for the current player' })
   getBookings(
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: BookingQueryDto,
@@ -79,7 +79,7 @@ export class BookingController {
 
   // GET /bookings/:id
   @Get('bookings/:id')
-  @ApiOperation({ summary: 'Booking detail' })
+  @ApiOperation({ summary: 'Get booking detail for the current player' })
   getBooking(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -90,7 +90,7 @@ export class BookingController {
   // POST /bookings/:id/cancel
   @Post('bookings/:id/cancel')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Cancel confirmed booking (refund policy applied)' })
+  @ApiOperation({ summary: 'Cancel a confirmed booking and apply refund policy if eligible' })
   cancelBooking(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -101,14 +101,14 @@ export class BookingController {
 
   @Post('matches/join')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Request to join an open match' })
+  @ApiOperation({ summary: 'Request to join an open match group' })
   requestJoinMatch(@CurrentUser() user: AuthenticatedUser, @Body() dto: RequestJoinDto) {
     return this.bookingService.requestJoinMatch(user.id, dto)
   }
 
   @Post('matches/join-requests/:id/respond')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Accept or reject a match join request' })
+  @ApiOperation({ summary: 'Accept or reject a pending match join request' })
   respondJoinRequest(
     @Param('id', ParseUUIDPipe) requestId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -119,7 +119,7 @@ export class BookingController {
 
   @Post('matches/:id/members/add-friend')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Add a friend directly to your match' })
+  @ApiOperation({ summary: 'Add a friend directly to your match group' })
   addFriendToMatch(
     @Param('id', ParseUUIDPipe) matchGroupId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -131,13 +131,13 @@ export class BookingController {
   @Public()
   @Get('matches')
   @Throttle({ default: { limit: 60, ttl: 60000 } })
-  @ApiOperation({ summary: 'List open matches with available spots' })
+  @ApiOperation({ summary: 'List public open matches with available spots' })
   getOpenMatches(@Query() query: OpenMatchesQueryDto) {
     return this.bookingService.getOpenMatches(query)
   }
 
   @Get('matches/:id/members')
-  @ApiOperation({ summary: 'Get match members' })
+  @ApiOperation({ summary: 'Get members for a match group' })
   getMatchMembers(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.bookingService.getMatchMembers(id, user.id)
   }
