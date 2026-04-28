@@ -516,6 +516,9 @@ model bookings {
   created_by_owner_id    String?         @db.Uuid
   created_at             DateTime        @default(now()) @db.Timestamptz(6)
   updated_at             DateTime        @updatedAt @db.Timestamptz(6)
+  // Flexible player booking metadata lives here without forcing a schema migration for every product tweak.
+  // Current player flow stores fields such as:
+  //   bookingType, requiredPlayers, maxPlayers, currentPlayerCount, playersNeeded, joinMode, costSplitMode
   booking_meta           Json?
   deleted_at             DateTime?       @db.Timestamptz(6)
 
