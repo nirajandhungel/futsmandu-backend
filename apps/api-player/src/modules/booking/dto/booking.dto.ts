@@ -34,19 +34,30 @@ export class HoldSlotDto {
   @IsString()
   startTime!: string
 
-  @ApiPropertyOptional({ type: [String] })
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Accepted friend user IDs to add immediately when the booking is created. Only players from the booking admin\'s friend list can be auto-added.',
+  })
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(9, { message: 'Maximum 9 friends per booking' })
   @IsUUID('4', { each: true })
   friendIds?: string[]
 
-  @ApiPropertyOptional({ enum: FlexibleBookingType, default: FlexibleBookingType.FLEX })
+  @ApiPropertyOptional({
+    enum: FlexibleBookingType,
+    default: FlexibleBookingType.FLEX,
+    description: 'FULL = private full-team booking, PARTIAL = admin already has some players and needs more, FLEX = flexible open booking.',
+  })
   @IsOptional()
   @IsEnum(FlexibleBookingType)
   bookingType?: FlexibleBookingType
 
-  @ApiPropertyOptional({ minimum: 2, maximum: 30 })
+  @ApiPropertyOptional({
+    minimum: 2,
+    maximum: 30,
+    description: 'Legacy field. Total number of confirmed players needed for the game to be considered on. Prefer using currentPlayerCount + playersNeeded for new clients.',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -54,7 +65,35 @@ export class HoldSlotDto {
   @Max(30)
   requiredPlayers?: number
 
-  @ApiPropertyOptional({ minimum: 2, maximum: 30 })
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: 30,
+    description: 'How many players you already have in your group including the booking admin. If friendIds are provided, this should normally equal 1 + friendIds.length.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(30)
+  currentPlayerCount?: number
+
+  @ApiPropertyOptional({
+    minimum: 0,
+    maximum: 30,
+    description: 'How many more players are still needed. Example: if you already have 6 players and need 3 more, set currentPlayerCount to 6 and playersNeeded to 3.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(30)
+  playersNeeded?: number
+
+  @ApiPropertyOptional({
+    minimum: 2,
+    maximum: 30,
+    description: 'Hard player limit for the booking/match. Example: set maxPlayers to 10 for a 5v5 game.',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -62,12 +101,20 @@ export class HoldSlotDto {
   @Max(30)
   maxPlayers?: number
 
-  @ApiPropertyOptional({ enum: join_mode, default: 'INVITE_ONLY' })
+  @ApiPropertyOptional({
+    enum: join_mode,
+    default: 'INVITE_ONLY',
+    description: 'Who can join after booking creation. INVITE_ONLY = only admin adds/invites players, OPEN = anyone can request/join, FRIENDS_ONLY = only friends of the booking admin can request/join.',
+  })
   @IsOptional()
   @IsEnum(join_mode)
   joinMode?: join_mode
 
-  @ApiPropertyOptional({ enum: cost_split_mode, default: 'ADMIN_PAYS_ALL' })
+  @ApiPropertyOptional({
+    enum: cost_split_mode,
+    default: 'ADMIN_PAYS_ALL',
+    description: 'ADMIN_PAYS_ALL = booking admin covers the full booking amount. SPLIT_EQUAL = cost is intended to be split equally among players.',
+  })
   @IsOptional()
   @IsEnum(cost_split_mode)
   costSplitMode?: cost_split_mode
