@@ -48,7 +48,7 @@ export class VenueManagementController {
   }
 
   @Post(':id/courts')
-  @ApiOperation({ summary: 'Create court' })
+  @ApiOperation({ summary: 'Create court with mandatory base pricing rule' })
   createCourt(
     @CurrentOwner() owner: AuthOwner,
     @Param('id') id: string,
