@@ -18,26 +18,26 @@ export class AdminUsersService {
   private readonly logger = new Logger(AdminUsersService.name)
   private readonly PAGE_SIZE = 25
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   async listUsers(query: ListUsersQuery) {
     const page = Math.max(1, query.page ?? 1)
     const skip = (page - 1) * this.PAGE_SIZE
 
-    const now   = new Date()
+    const now = new Date()
     const where: Record<string, unknown> = {}
 
     if (query.search) {
       where['OR'] = [
-        { name:  { contains: query.search, mode: 'insensitive' } },
+        { name: { contains: query.search, mode: 'insensitive' } },
         { email: { contains: query.search, mode: 'insensitive' } },
         { phone: { contains: query.search, mode: 'insensitive' } },
       ]
     }
-    if (query.status === 'banned')    where['ban_until']    = { gt: now }
+    if (query.status === 'banned') where['ban_until'] = { gt: now }
     if (query.status === 'suspended') where['is_suspended'] = true
     if (query.status === 'active') {
-      where['is_active']    = true
+      where['is_active'] = true
       where['is_suspended'] = false
       where['OR'] = [{ ban_until: null }, { ban_until: { lte: now } }]
     }
@@ -78,7 +78,7 @@ export class AdminUsersService {
             id: true, penalty_type: true, reason: true,
             ends_at: true, status: true, created_at: true,
           },
-          where:   { status: 'active' },
+          where: { status: 'active' },
           orderBy: { created_at: 'desc' },
           take: 10,
         },
@@ -97,17 +97,17 @@ export class AdminUsersService {
     const skip = (page - 1) * 20
     const [bookings, total] = await Promise.all([
       this.prisma.bookings.findMany({
-        where:   { player_id: userId },
+        where: { player_id: userId },
         select: {
-          id:             true,
-          status:         true,
+          id: true,
+          status: true,
           booking_source: true,   // ← was booking_type (field does not exist in schema)
           payment_method: true,
-          booking_date:   true,
-          start_time:     true,
-          end_time:       true,
-          total_amount:   true,
-          created_at:     true,
+          booking_date: true,
+          start_time: true,
+          end_time: true,
+          total_amount: true,
+          created_at: true,
           court: { select: { id: true, name: true } },
           venue: { select: { id: true, name: true } },
         },
@@ -121,24 +121,23 @@ export class AdminUsersService {
   }
 
   async suspendUser(adminId: string, userId: string, reason: string) {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { id: true, name: true },
-    })
-    if (!user) throw new NotFoundException('User not found')
-
     await this.prisma.$transaction(async (tx: PrismaTx) => {
-      await tx.users.update({
+      const updated = await tx.users.updateMany({
         where: { id: userId },
-        data:  { is_suspended: true, updated_at: new Date() },
+        data: { is_suspended: true, updated_at: new Date() },
       })
+
+      if (updated.count === 0) {
+        throw new NotFoundException('User not found')
+      }
+
       await tx.penalty_history.create({
         data: {
-          player_id:    userId,
+          player_id: userId,
           penalty_type: 'SUSPENDED',
-          reason:       reason ?? 'Suspended by admin',
+          reason: reason ?? 'Suspended by admin',
           triggered_by: adminId,
-          status:       'active',
+          status: 'active',
         },
       })
     })
@@ -148,20 +147,30 @@ export class AdminUsersService {
   }
 
   async reinstateUser(adminId: string, userId: string) {
-    const user = await this.prisma.users.findUnique({
-      where: { id: userId },
-      select: { id: true },
-    })
-    if (!user) throw new NotFoundException('User not found')
-
     await this.prisma.$transaction(async (tx: PrismaTx) => {
-      await tx.users.update({
+      const result = await tx.users.updateMany({
         where: { id: userId },
-        data:  { is_suspended: false, ban_until: null, updated_at: new Date() },
+        data: {
+          is_suspended: false,
+          ban_until: null,
+          updated_at: new Date(),
+        },
       })
+
+      if (result.count === 0) {
+        throw new NotFoundException('User not found')
+      }
+
       await tx.penalty_history.updateMany({
-        where: { player_id: userId, penalty_type: 'SUSPENDED', status: 'active' },
-        data:  { status: 'overridden', admin_note: `Reinstated by admin ${adminId}` },
+        where: {
+          player_id: userId,
+          penalty_type: 'SUSPENDED',
+          status: 'active',
+        },
+        data: {
+          status: 'overridden',
+          admin_note: `Reinstated by admin ${adminId}`,
+        },
       })
     })
 
