@@ -48,13 +48,21 @@ export class PricingService {
     }
     const priority = canonicalPriority ?? dto.priority!
 
-    // Check base rule already exists (only one base allowed)
+    // Enforce a single mandatory base rule per court.
     if (dto.rule_type === 'base') {
       const existing = await this.prisma.pricing_rules.findFirst({
         where: { court_id: courtId, rule_type: 'base' },
         select: { id: true },
       })
       if (existing) throw new ConflictException('Court already has a base pricing rule')
+    } else {
+      const baseRule = await this.prisma.pricing_rules.findFirst({
+        where: { court_id: courtId, rule_type: 'base', is_active: true },
+        select: { id: true },
+      })
+      if (!baseRule) {
+        throw new BadRequestException('Create a base pricing rule for this court before adding special pricing rules')
+      }
     }
 
     return this.prisma.pricing_rules.create({
