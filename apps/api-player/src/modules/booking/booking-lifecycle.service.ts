@@ -21,6 +21,13 @@ type BookingMeta = {
   bookingType: 'FULL' | 'PARTIAL' | 'FLEX'
   requiredPlayers?: number
   maxPlayers?: number
+  currentPlayerCount?: number
+  playersNeeded?: number
+}
+
+type FriendshipRow = {
+  requester_id: string
+  recipient_id: string
 }
 
 @Injectable()
@@ -50,10 +57,30 @@ export class BookingLifecycleService {
   const bookingType = dto.bookingType ?? 'FLEX'
   const requestedMaxPlayers = dto.maxPlayers
   const requestedRequiredPlayers = dto.requiredPlayers
-  if (requestedRequiredPlayers && requestedMaxPlayers && requestedRequiredPlayers > requestedMaxPlayers) {
+  const selectedFriendIds = [...new Set(dto.friendIds ?? [])]
+  const derivedCurrentPlayerCount = 1 + selectedFriendIds.length
+  const requestedCurrentPlayerCount = dto.currentPlayerCount ?? derivedCurrentPlayerCount
+  const requestedPlayersNeeded = dto.playersNeeded
+
+  if (dto.currentPlayerCount !== undefined && dto.currentPlayerCount !== derivedCurrentPlayerCount) {
+    throw new BadRequestException('currentPlayerCount must equal booking admin + the number of auto-added friends')
+  }
+  if (requestedPlayersNeeded !== undefined && requestedPlayersNeeded === 0 && bookingType !== 'FULL') {
+    throw new BadRequestException('Use FULL booking if no extra players are needed')
+  }
+
+  const normalizedRequiredPlayers =
+    requestedPlayersNeeded !== undefined
+      ? requestedCurrentPlayerCount + requestedPlayersNeeded
+      : requestedRequiredPlayers
+
+  if (normalizedRequiredPlayers && requestedMaxPlayers && normalizedRequiredPlayers > requestedMaxPlayers) {
     throw new BadRequestException('requiredPlayers cannot exceed maxPlayers')
   }
-  if (bookingType === 'FULL' && requestedRequiredPlayers && requestedMaxPlayers && requestedRequiredPlayers !== requestedMaxPlayers) {
+  if (bookingType === 'FULL' && requestedPlayersNeeded !== undefined && requestedPlayersNeeded !== 0) {
+    throw new BadRequestException('Full booking cannot have additional players needed')
+  }
+  if (bookingType === 'FULL' && normalizedRequiredPlayers && requestedMaxPlayers && normalizedRequiredPlayers !== requestedMaxPlayers) {
     throw new BadRequestException('Full booking requires requiredPlayers to equal maxPlayers')
   }
 
@@ -69,7 +96,7 @@ export class BookingLifecycleService {
 
   const lockKey = `${dto.courtId}:${dto.date}:${dto.startTime}`
 
-  return this.prisma.$transaction(async (tx: any) => {
+  const result = await this.prisma.$transaction(async (tx: any) => {
     const [lock] = await tx.$queryRaw<[{ acquired: boolean }]>`
       SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})) AS acquired`
     if (!lock?.acquired) throw new ConflictException('Slot just taken — choose another time')
@@ -112,9 +139,37 @@ export class BookingLifecycleService {
     if (blockedSlot)  throw new ConflictException('Slot is not available for booking')
 
     const effectiveMaxPlayers = requestedMaxPlayers ?? court.capacity
-    const effectiveRequiredPlayers = requestedRequiredPlayers ?? (bookingType === 'FULL' ? effectiveMaxPlayers : court.min_players)
+    const effectiveRequiredPlayers = normalizedRequiredPlayers ?? (bookingType === 'FULL' ? effectiveMaxPlayers : court.min_players)
     if (effectiveMaxPlayers > court.capacity) throw new BadRequestException(`maxPlayers cannot exceed court capacity (${court.capacity})`)
     if (effectiveRequiredPlayers > effectiveMaxPlayers) throw new BadRequestException('requiredPlayers cannot exceed maxPlayers')
+    const confirmedPlayerCountAtCreation = requestedCurrentPlayerCount
+    if (confirmedPlayerCountAtCreation > effectiveMaxPlayers) {
+      throw new BadRequestException('You cannot add more confirmed players than maxPlayers')
+    }
+    if (effectiveRequiredPlayers < confirmedPlayerCountAtCreation) {
+      throw new BadRequestException('requiredPlayers cannot be less than the number of players already added (including you)')
+    }
+
+    if (selectedFriendIds.length > 0) {
+      const acceptedFriends = await tx.friendships.findMany({
+        where: {
+          status: 'accepted',
+          OR: [
+            { requester_id: playerId, recipient_id: { in: selectedFriendIds } },
+            { recipient_id: playerId, requester_id: { in: selectedFriendIds } },
+          ],
+        },
+        select: { requester_id: true, recipient_id: true },
+      }) as FriendshipRow[]
+
+      const acceptedFriendIds = new Set(
+        acceptedFriends.map((f) => (f.requester_id === playerId ? f.recipient_id : f.requester_id)),
+      )
+      const invalidFriendId = selectedFriendIds.find((id) => !acceptedFriendIds.has(id))
+      if (invalidFriendId) {
+        throw new ForbiddenException('Only accepted friends can be auto-added to the booking')
+      }
+    }
 
     const { price, ruleId } = await calculatePrice(tx as Parameters<typeof calculatePrice>[0], dto.courtId, dto.date, dto.startTime)
 
@@ -125,6 +180,8 @@ export class BookingLifecycleService {
       bookingType,
       requiredPlayers:  effectiveRequiredPlayers,
       maxPlayers:       effectiveMaxPlayers,
+      currentPlayerCount: confirmedPlayerCountAtCreation,
+      playersNeeded: Math.max(effectiveRequiredPlayers - confirmedPlayerCountAtCreation, 0),
     }
 
     const booking = await tx.bookings.create({
@@ -141,19 +198,89 @@ export class BookingLifecycleService {
         total_amount:      price,
         base_price:        price,
         applied_rule_id:   ruleId ?? null,
-        status:            'HELD',
-        hold_expires_at:   new Date(Date.now() + 7 * 60 * 1000),
+        status:            'CONFIRMED',
+        hold_expires_at:   null,
+        payment_method:    'ESEWA',
         created_by_user_id: playerId,
         booking_meta:      bookingMeta as Prisma.InputJsonValue,
       },
     })
 
-    this.redis
-      .set(this.redis.keys.slotHold(dto.courtId, dto.date, dto.startTime), playerId, 420)
-      .catch((e: unknown) => this.logger.error('Redis hold mirror failed', e))
+    await tx.payments.create({
+      data: {
+        booking_id: booking.id,
+        player_id: playerId,
+        amount: price,
+        gateway: 'ESEWA',
+        payment_method: 'ESEWA',
+        status: 'SUCCESS',
+        gateway_tx_id: `player-booking-${booking.id}`,
+        gateway_response: {
+          source: 'player_booking',
+          paymentBypassed: true,
+          reason: 'Temporary direct booking confirmation without external gateway',
+        } as Prisma.InputJsonValue,
+        initiated_at: new Date(),
+        completed_at: new Date(),
+      },
+    })
 
-    return { ...booking, displayAmount: formatPaisa(price) }
+    const isFlexOrPartial = bookingType === 'FLEX' || bookingType === 'PARTIAL'
+    const effectiveJoinMode = isFlexOrPartial ? 'OPEN' : (bookingMeta.joinMode ?? 'INVITE_ONLY')
+    const effectiveSplitMode = isFlexOrPartial ? 'SPLIT_EQUAL' : (bookingMeta.costSplitMode ?? 'ADMIN_PAYS_ALL')
+
+    const matchGroup = await tx.match_groups.create({
+      data: {
+        booking_id: booking.id,
+        venue_id: court.venue_id,
+        court_id: dto.courtId,
+        match_date: booking.booking_date,
+        start_time: booking.start_time,
+        end_time: booking.end_time,
+        admin_id: playerId,
+        max_players: effectiveMaxPlayers,
+        min_players: effectiveRequiredPlayers,
+        is_open: effectiveJoinMode !== 'INVITE_ONLY',
+        join_mode: effectiveJoinMode,
+        auto_accept: isFlexOrPartial,
+        cost_split_mode: effectiveSplitMode,
+        description: bookingMeta.description ?? null,
+      },
+    })
+
+    await tx.match_group_members.create({
+      data: {
+        match_group_id: matchGroup.id,
+        user_id: playerId,
+        role: 'admin',
+        status: 'confirmed',
+      },
+    })
+
+    if (selectedFriendIds.length > 0) {
+      await tx.match_group_members.createMany({
+        data: selectedFriendIds.map((friendId) => ({
+          match_group_id: matchGroup.id,
+          user_id: friendId,
+          role: 'player',
+          status: 'confirmed',
+          invited_by: playerId,
+        })),
+      })
+    }
+
+    return { ...booking, paymentStatus: 'SUCCESS', displayAmount: formatPaisa(price), matchGroup }
   }, { isolationLevel: 'Serializable', maxWait: 1500, timeout: 5000 })
+
+  const player = await this.prisma.users.findUnique({
+    where: { id: playerId },
+    select: { email: true, name: true },
+  })
+  await this.notifQueue.add('booking-confirmed', { type: 'BOOKING_CONFIRMED', userId: playerId, data: { bookingId: result.id } }, { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: 100, removeOnFail: 200 })
+  await this.emailQueue.add('booking-confirmation', { type: 'booking-confirmation', to: player?.email ?? '', name: player?.name ?? '', data: { bookingId: result.id } }, { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: 100, removeOnFail: 200 })
+  await this.analyticsQueue.add('booking-event', { type: 'confirmed', bookingId: result.id }, { attempts: 2, backoff: { type: 'exponential', delay: 3000 }, removeOnComplete: 50, removeOnFail: 100 })
+
+  return result
 }
 
   async confirmPayment(bookingId: string, verified: GatewayVerification, _gateway: 'KHALTI' | 'ESEWA') {
