@@ -43,8 +43,10 @@ export function calculatePriceFromRules(
   const activeRules = rules
     .filter(r => r.is_active)
     .sort((a, b) => b.priority - a.priority)
+  const baseRule = activeRules.find(r => r.rule_type === 'base')
 
   if (activeRules.length === 0) throw new Error('No active pricing rules')
+  if (!baseRule) throw new Error('Base pricing rule missing')
 
   const slotDate = new Date(date)
   const dayOfWeek = slotDate.getDay()
@@ -65,9 +67,6 @@ export function calculatePriceFromRules(
 
     if (rule.modifier === 'fixed') return { price: rule.price, ruleId: rule.id, ruleType: rule.rule_type }
 
-    const baseRule = activeRules.find(r => r.rule_type === 'base')
-    if (!baseRule) throw new Error('Base pricing rule missing')
-
     if (rule.modifier === 'percent_add') {
       return { price: Math.round(baseRule.price * (1 + rule.price / 100)), ruleId: rule.id, ruleType: rule.rule_type }
     }
@@ -76,7 +75,7 @@ export function calculatePriceFromRules(
     }
   }
 
-  throw new Error('No matching pricing rule')
+  return { price: baseRule.price, ruleId: baseRule.id, ruleType: baseRule.rule_type }
 }
 
 /**
