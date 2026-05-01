@@ -5,7 +5,7 @@
 // JWT: OWNER_JWT_SECRET only — never shares secret with admin or player.
 
 import { Module } from '@nestjs/common'
-import { APP_GUARD } from '@nestjs/core'
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core'
 import { ConfigModule, ConfigService } from '@nestjs/config'
 import { JwtModule } from '@nestjs/jwt'
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler'
@@ -26,6 +26,8 @@ import { MediaModule }           from './modules/media/media.module.js'
 import { NotificationsModule }   from './modules/notifications/notifications.module.js'
 import { HealthModule }          from './modules/health/health.module.js'
 import { OwnerPaymentModule } from './modules/owner-payment/owner-payment.module.js'
+import { AbuseDetectionGuard } from './common/guards/abuse-detection.guard.js'
+import { AuditModule, AuditInterceptor, AuditService } from '@futsmandu/audit'
 import { ENV } from '@futsmandu/utils'
 
 @Module({
@@ -40,6 +42,7 @@ import { ENV } from '@futsmandu/utils'
 
     PrismaModule,
     RedisModule,
+    AuditModule,
 
     // Owner JWT — 15m access, 30d refresh (Flutter Keychain/SecureStorage)
     // NOT global — imported only in OwnerAuthModule so the secret stays scoped
@@ -76,6 +79,20 @@ import { ENV } from '@futsmandu/utils'
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: AbuseDetectionGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useFactory: (auditService: AuditService) => new AuditInterceptor(auditService, {
+        actorType: 'OWNER',
+        actorRole: 'OWNER_ADMIN',
+        identityProperty: 'owner',
+        urlNamespace: 'owner',
+      }),
+      inject: [AuditService],
     },
   ],
 })
