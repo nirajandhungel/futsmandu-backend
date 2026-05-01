@@ -8,6 +8,7 @@ import { JwtService } from '@nestjs/jwt'
 import bcrypt from 'bcryptjs'
 import { PrismaService } from '@futsmandu/database'
 import { OtpService } from '@futsmandu/auth'
+import { AuditService } from '@futsmandu/audit'
 import type { AdminLoginDto } from './dto/admin-auth.dto.js'
 import { ENV } from '@futsmandu/utils'
 
@@ -31,6 +32,7 @@ export class AdminAuthService {
     private readonly prisma:     PrismaService,
     private readonly jwt:        JwtService,
     private readonly otpService: OtpService,
+    private readonly audit:      AuditService,
   ) {}
 
   async login(dto: AdminLoginDto) {
@@ -65,6 +67,18 @@ export class AdminAuthService {
     if (ENV['NODE_ENV'] === 'production' && !dto.totpCode) {
       throw new UnauthorizedException('2FA code required in production')
     }
+
+    // Log admin login
+    void this.audit.logAdminAction({
+      adminId: admin.id,
+      action: 'Auth Login',
+      targetType: 'admins',
+      targetId: admin.id,
+      metadata: {
+        email: admin.email,
+        context: 'Dashboard Login',
+      },
+    })
 
     return {
       accessToken: this.signAdminAccess(admin.id, admin.email, adminRole),
