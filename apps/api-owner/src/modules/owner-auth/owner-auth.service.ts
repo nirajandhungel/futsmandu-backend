@@ -15,6 +15,7 @@ import { PrismaService } from '@futsmandu/database'
 import type { JwtPayload } from '@futsmandu/types'
 import type { RegisterOwnerDto, LoginOwnerDto } from './dto/owner-auth.dto.js'
 import { OtpService } from '@futsmandu/auth'
+import { AuditService } from '@futsmandu/audit'
 import { ENV } from '@futsmandu/utils'
 
 // Cost-10 hash of 'dummy_password' — keeps timing consistent for non-existent accounts
@@ -50,6 +51,7 @@ export class OwnerAuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly otpService: OtpService,
+    private readonly audit: AuditService,
     @InjectQueue('owner-emails') private readonly emailQueue: Queue,
   ) {}
 
@@ -98,7 +100,21 @@ async register(dto: RegisterOwnerDto) {
     owner.email,
   )
 
-  // 4. Return immediately
+  // 4. Log registration
+  void this.audit.log({
+    actorType: 'OWNER',
+    actorId: owner.id,
+    action: 'CREATE',
+    targetType: 'owners',
+    targetId: owner.id,
+    metadata: {
+      email: owner.email,
+      business_name: owner.business_name,
+      context: 'Owner Registration',
+    },
+  })
+
+  // 5. Return immediately
   return owner
 }
 
@@ -129,6 +145,20 @@ async register(dto: RegisterOwnerDto) {
     }
 
     const { password_hash: _pw, ...safeOwner } = owner
+
+    // Log successful login
+    void this.audit.log({
+      actorType: 'OWNER',
+      actorId: owner.id,
+      action: 'LOGIN',
+      targetType: 'owners',
+      targetId: owner.id,
+      metadata: {
+        email: owner.email,
+        context: 'Owner Dashboard Login',
+      },
+    })
+
     return {
       accessToken:  this.signAccess(owner.id, owner.email, 'OWNER_ADMIN'),
       refreshToken: this.signRefresh(owner.id),
