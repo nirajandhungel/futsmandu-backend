@@ -40,6 +40,9 @@
     },
     {
       "path": "../../packages/media-core"
+    },
+    {
+      "path": "../../packages/security"
     }
   ]
 }

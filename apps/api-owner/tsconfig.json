@@ -43,6 +43,9 @@
     },
     {
       "path": "../../packages/media-storage"
+    },
+    {
+      "path": "../../packages/security"
     }
   ]
 }
