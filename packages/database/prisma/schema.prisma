@@ -221,6 +221,13 @@ enum action_type {
   REPORT
 }
 
+enum platform_config_type {
+  number
+  boolean
+  string
+}
+
+
 // ==================== MODELS ====================
 
 model users {
@@ -583,14 +590,17 @@ model payments {
 }
 
 model platform_config {
-  key         String   @id
+  key         String               @id
   value       String
+  type        platform_config_type
   description String?
-  updated_by  String?  @db.Uuid
-  updated_at  DateTime @updatedAt @db.Timestamptz(6)
+  updated_by  String?              @db.Uuid
+  updated_at  DateTime             @updatedAt @db.Timestamptz(6)
 
   @@map("platform_config")
 }
+
+
 
 model owner_payouts {
   id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -970,6 +980,30 @@ model admin_audit_log {
   @@index([admin_id, created_at(sort: Desc)])
   @@index([target_id, target_type])
   @@index([created_at])
+}
+
+model security_incidents {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actor_type     actor_type
+  actor_id       String    @db.Uuid
+  actor_role     String
+  incident_type  String
+  severity       String
+  level          Int       @db.SmallInt
+  risk_score     Int
+  request_count  Int?
+  ip_address     String?
+  user_agent     String?
+  endpoint       String?
+  method         String?
+  scope_key      String
+  cooldown_until DateTime? @db.Timestamptz(6)
+  metadata       Json?
+  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([actor_type, actor_id, created_at(sort: Desc)])
+  @@index([incident_type, severity, created_at(sort: Desc)])
+  @@index([scope_key, created_at(sort: Desc)])
 }
 
 // FIX 8: used_count race condition is prevented by:
