@@ -4,6 +4,8 @@ import { ConfigModule } from '@nestjs/config'
 import { SentryModule } from '@sentry/nestjs/setup'
 import { PrismaModule } from '@futsmandu/database'
 import { AdminEmailProcessor } from './processors/email.processor.js'
+import { AuditLogProcessor } from '@futsmandu/audit'
+import { SecurityIncidentProcessor } from './processors/security-incident.processor.js'
 import { QueuesModule } from '@futsmandu/queues'
 
 @Module({
@@ -14,6 +16,6 @@ import { QueuesModule } from '@futsmandu/queues'
     // Centralized queue registration (prevents duplicate queue/worker instances)
     QueuesModule,
   ],
-  providers: [AdminEmailProcessor],
+  providers: [AdminEmailProcessor, AuditLogProcessor, SecurityIncidentProcessor],
 })
 export class AdminWorkerModule {}
