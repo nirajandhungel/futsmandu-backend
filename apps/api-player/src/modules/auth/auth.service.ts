@@ -9,8 +9,9 @@ import  bcrypt from 'bcryptjs'
 import { PrismaService } from '@futsmandu/database'
 import type { Prisma } from '@futsmandu/database'
 import type { JwtPayload } from '@futsmandu/types'
-import type { RegisterDto, LoginDto } from './dto/auth.dto.js'
+import { RegisterDto, LoginDto } from './dto/auth.dto.js'
 import { OtpService } from '@futsmandu/auth'
+import { AuditService } from '@futsmandu/audit'
 import { ENV } from '@futsmandu/utils'
 
 // Cost-10 hash of 'dummy_password' — keeps timing consistent for non-existent accounts
@@ -36,6 +37,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly otpService: OtpService,
+    private readonly audit: AuditService,
     @InjectQueue('player-emails') private readonly emailQueue: Queue,
   ) {}
 
@@ -83,6 +85,20 @@ export class AuthService {
       otp: result.otp.otp,
     })
 
+    // Log account creation
+    void this.audit.log({
+      actorType: 'USER',
+      actorId: result.user.id,
+      action: 'CREATE',
+      targetType: 'users',
+      targetId: result.user.id,
+      metadata: {
+        email: result.user.email,
+        name: result.user.name,
+        context: 'Registration',
+      },
+    })
+
     return result.user
   }
 // Updated: Check is_verified before issuing tokens
@@ -106,6 +122,20 @@ export class AuthService {
     if (!user.is_verified) throw new ForbiddenException('Please verify your email first before logging in')
   
     const { password_hash: _pw, refresh_token_version: _rtv, ...safeUser } = user
+
+    // Log successful login
+    void this.audit.log({
+      actorType: 'USER',
+      actorId: user.id,
+      action: 'LOGIN',
+      targetType: 'users',
+      targetId: user.id,
+      metadata: {
+        email: user.email,
+        context: 'Auth Login',
+      },
+    })
+
     return {
       accessToken:  this.signAccess(user.id, user.email),
       refreshToken: this.signRefresh(user.id, user.refresh_token_version),
