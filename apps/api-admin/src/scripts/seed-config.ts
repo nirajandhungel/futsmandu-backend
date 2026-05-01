@@ -7,8 +7,10 @@ import { ConfigService } from '@nestjs/config'
 type PlatformSeedItem = {
   key: string
   value: string
+  type: string
   description?: string
 }
+
 
 type SeedConfigFile = {
   platformConfig: PlatformSeedItem[]
@@ -31,13 +33,19 @@ function normalizeConfig(input: unknown): SeedConfigFile {
   }
   const platformConfig = file.platformConfig.map((item, index) => {
     const candidate = item as PlatformSeedItem
+    const type = assertString(candidate.type, `platformConfig[${index}].type`)
+    if (!['number', 'boolean', 'string'].includes(type)) {
+      throw new Error(`Invalid type at platformConfig[${index}].type: must be number, boolean, or string`)
+    }
     const description = typeof candidate.description === 'string' ? candidate.description.trim() : undefined
     return {
       key: assertString(candidate.key, `platformConfig[${index}].key`),
       value: assertString(candidate.value, `platformConfig[${index}].value`),
+      type,
       description,
     }
   })
+
   return { platformConfig }
 }
 
@@ -67,12 +75,15 @@ async function main() {
         create: {
           key: item.key,
           value: item.value,
+          type: item.type,
           description: item.description,
         },
         update: {
           value: item.value,
+          type: item.type,
           description: item.description,
         },
+
       })
       console.log(`[seed:config] upserted ${item.key}=${item.value}`)
     }
