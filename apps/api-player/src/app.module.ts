@@ -9,9 +9,10 @@
 // QueuesModule owns all BullMQ queue registrations — feature modules import it.
 
 import { Module } from '@nestjs/common'
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core'
 import { ConfigModule, ConfigService } from '@nestjs/config'
 import { JwtModule } from '@nestjs/jwt'
-import { ThrottlerModule } from '@nestjs/throttler'
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler'
 import { SentryModule } from '@sentry/nestjs/setup'
 
 import { PrismaModule } from '@futsmandu/database'
@@ -27,6 +28,8 @@ import { DiscoveryModule }   from './modules/discovery/discovery.module.js'
 import { NotificationModule } from './modules/notification/notification.module.js'
 import { ProfileModule }     from './modules/profile/profile.module.js'
 import { HealthModule }      from './modules/health/health.module.js'
+import { AbuseDetectionGuard } from './common/guards/abuse-detection.guard.js'
+import { AuditModule, AuditInterceptor, AuditService } from '@futsmandu/audit'
 import { ENV } from '@futsmandu/utils'
 
 @Module({
@@ -41,6 +44,7 @@ import { ENV } from '@futsmandu/utils'
 
     PrismaModule,
     RedisModule,
+    AuditModule,
 
     JwtModule.register({
       global: true,
@@ -69,6 +73,24 @@ import { ENV } from '@futsmandu/utils'
       provide: 'SENTRY_DSN',
       useFactory: (config: ConfigService) => config.get<string>('SENTRY_DSN'),
       inject: [ConfigService],
+    },
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: AbuseDetectionGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useFactory: (auditService: AuditService) => new AuditInterceptor(auditService, {
+        actorType: 'USER',
+        actorRole: 'PLAYER',
+        identityProperty: 'user',
+        urlNamespace: 'player',
+      }),
+      inject: [AuditService],
     },
   ],
 })
