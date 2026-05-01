@@ -18,6 +18,8 @@
     { "path": "./packages/auth" },
     { "path": "./packages/sentry" },
     { "path": "./packages/esewa-payout" },
+    { "path": "./packages/audit" },
+    { "path": "./packages/security" },
     { "path": "./apps/api-player" },
     { "path": "./apps/api-owner" },
     { "path": "./apps/api-admin" }
