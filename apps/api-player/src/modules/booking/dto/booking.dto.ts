@@ -14,10 +14,9 @@ import { Type, Transform } from 'class-transformer'
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
 import { booking_status, cost_split_mode, join_mode } from '@futsmandu/database'
 
-export enum FlexibleBookingType {
+export enum BookingType {
   FULL = 'FULL',
   PARTIAL = 'PARTIAL',
-  FLEX = 'FLEX',
 }
 
 export class HoldSlotDto {
@@ -45,29 +44,17 @@ export class HoldSlotDto {
   friendIds?: string[]
 
   @ApiPropertyOptional({
-    enum: FlexibleBookingType,
-    default: FlexibleBookingType.FLEX,
-    description: 'FULL = private full-team booking, PARTIAL = admin already has some players and needs more, FLEX = flexible open booking.',
+    enum: BookingType,
+    default: BookingType.PARTIAL,
+    description: 'FULL = private booking (no public joins), PARTIAL = open booking (players can join from platform).',
   })
   @IsOptional()
-  @IsEnum(FlexibleBookingType)
-  bookingType?: FlexibleBookingType
-
-  @ApiPropertyOptional({
-    minimum: 2,
-    maximum: 30,
-    description: 'Legacy field. Total number of confirmed players needed for the game to be considered on. Prefer using currentPlayerCount + playersNeeded for new clients.',
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(2)
-  @Max(30)
-  requiredPlayers?: number
+  @IsEnum(BookingType)
+  bookingType?: BookingType
 
   @ApiPropertyOptional({
     minimum: 1,
-    maximum: 30,
+    maximum: 10,
     description: 'How many players you already have in your group including the booking admin. If friendIds are provided, this should normally equal 1 + friendIds.length.',
   })
   @IsOptional()
@@ -79,7 +66,7 @@ export class HoldSlotDto {
 
   @ApiPropertyOptional({
     minimum: 0,
-    maximum: 30,
+    maximum: 10,
     description: 'How many more players are still needed. Example: if you already have 6 players and need 3 more, set currentPlayerCount to 6 and playersNeeded to 3.',
   })
   @IsOptional()
@@ -91,8 +78,8 @@ export class HoldSlotDto {
 
   @ApiPropertyOptional({
     minimum: 2,
-    maximum: 30,
-    description: 'Hard player limit for the booking/match. Example: set maxPlayers to 10 for a 5v5 game.',
+    maximum: 10,
+    description: 'Total players for the match. Equivalent to currentPlayerCount + playersNeeded.',
   })
   @IsOptional()
   @Type(() => Number)
@@ -103,8 +90,7 @@ export class HoldSlotDto {
 
   @ApiPropertyOptional({
     enum: join_mode,
-    default: 'INVITE_ONLY',
-    description: 'Who can join after booking creation. INVITE_ONLY = only admin adds/invites players, OPEN = anyone can request/join, FRIENDS_ONLY = only friends of the booking admin can request/join.',
+    description: 'Optional. Ignored for PARTIAL (always OPEN) and FULL (always INVITE_ONLY).',
   })
   @IsOptional()
   @IsEnum(join_mode)
