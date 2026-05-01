@@ -41,3 +41,26 @@ export function nepalDateTime(date: Date, startTime: string): Date {
 export function hoursUntilSlot(date: Date, startTime: string): number {
   return (nepalDateTime(date, startTime).getTime() - Date.now()) / 3_600_000
 }
+
+/** Parse platform config string values into their intended types */
+export function parsePlatformConfig(
+  value: string,
+  type: 'number' | 'boolean' | 'string',
+): number | boolean | string {
+  switch (type) {
+    case 'number': {
+      const n = Number.parseFloat(value)
+      if (Number.isNaN(n)) {
+        throw new Error(`Invalid number config: ${value}`)
+      }
+      return n
+    }
+    case 'boolean':
+      return value === 'true'
+    case 'string':
+    default:
+      return value
+  }
+}
+
+
