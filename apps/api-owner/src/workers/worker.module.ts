@@ -14,6 +14,8 @@ import { SentryModule } from '@sentry/nestjs/setup'
 import { OwnerEmailProcessor }        from './processors/email.processor.js'
 import { OwnerNotificationProcessor } from './processors/notification.processor.js'
 import { OwnerSmsProcessor }          from './processors/sms.processor.js'
+import { AuditLogProcessor, AuditModule } from '@futsmandu/audit'
+import { SecurityIncidentProcessor } from './processors/security-incident.processor.js'
 // ✂️  REMOVED: import { ImageProcessingProcessor } from './processors/image-processing.processor.js'
 //              → this now lives in @futsmandu/media and is registered by MediaModule.forWorker()
 
@@ -23,12 +25,15 @@ import { OwnerSmsProcessor }          from './processors/sms.processor.js'
     SentryModule.forRoot(),
     DatabaseModule,
     QueuesModule,
+    AuditModule,
     MediaModule.forWorker(),   // ← registers shared ImageProcessingProcessor
   ],
   providers: [
     OwnerEmailProcessor,
     OwnerNotificationProcessor,
     OwnerSmsProcessor,
+    AuditLogProcessor,
+    SecurityIncidentProcessor,
     // ✂️  REMOVED: ImageProcessingProcessor
   ],
 })
