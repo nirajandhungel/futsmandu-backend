@@ -13,6 +13,8 @@ export const QUEUE_ADMIN_ALERTS = 'admin-alerts' as const
 export const QUEUE_OWNER_PAYOUTS = 'owner-payouts' as const
 export const QUEUE_PAYOUT_RETRY = 'payout-retry' as const
 export const QUEUE_MEDIA_ORPHAN_CLEANUP = 'media-orphan-cleanup' as const
+export const QUEUE_AUDIT_LOGS = 'audit-logs' as const
+export const QUEUE_SECURITY_INCIDENTS = 'security-incidents' as const
 
 export const ALL_QUEUE_NAMES = [
   QUEUE_NOTIFICATIONS,
@@ -30,6 +32,8 @@ export const ALL_QUEUE_NAMES = [
   QUEUE_OWNER_PAYOUTS,
   QUEUE_PAYOUT_RETRY,
   QUEUE_MEDIA_ORPHAN_CLEANUP,
+  QUEUE_AUDIT_LOGS,
+  QUEUE_SECURITY_INCIDENTS,
 ] as const
 
 export type QueueName = (typeof ALL_QUEUE_NAMES)[number]

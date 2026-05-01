@@ -17,6 +17,8 @@ import {
   QUEUE_REFUNDS,
   QUEUE_SMS,
   QUEUE_SLOT_EXPIRY,
+  QUEUE_AUDIT_LOGS,
+  QUEUE_SECURITY_INCIDENTS,
 } from './queue.constants.js'
 
 @Global()
@@ -56,6 +58,8 @@ import {
       { name: QUEUE_OWNER_PAYOUTS },
       { name: QUEUE_PAYOUT_RETRY },
       { name: QUEUE_MEDIA_ORPHAN_CLEANUP },
+      { name: QUEUE_AUDIT_LOGS },
+      { name: QUEUE_SECURITY_INCIDENTS },
     ),
   ],
   exports: [BullModule],
