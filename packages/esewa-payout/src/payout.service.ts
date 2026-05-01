@@ -4,6 +4,8 @@ import { Queue } from 'bullmq'
 import { PrismaService } from '@futsmandu/database'
 import type { Prisma } from '@futsmandu/database'
 import { QUEUE_OWNER_PAYOUTS } from '@futsmandu/queues'
+import { parsePlatformConfig } from '@futsmandu/utils'
+
 
 export interface PayoutJobData {
   payoutId: string
@@ -11,6 +13,9 @@ export interface PayoutJobData {
 
 @Injectable()
 export class PayoutService {
+  private readonly configCache = new Map<string, { value: any; expires: number }>()
+  private readonly CACHE_TTL = 300_000 // 5 minutes
+
   private readonly logger = new Logger(PayoutService.name)
 
   constructor(
@@ -18,15 +23,49 @@ export class PayoutService {
     @InjectQueue(QUEUE_OWNER_PAYOUTS) private readonly payoutQueue: Queue<PayoutJobData>,
   ) {}
 
-  async getAdminFeePct(): Promise<number> {
+  async getConfig<T>(key: string, defaultValue: T): Promise<T> {
+    const cached = this.configCache.get(key)
+    if (cached && cached.expires > Date.now()) {
+      return cached.value as T
+    }
+
     const config = await this.prisma.platform_config.findUnique({
-      where: { key: 'admin_fee_percent' },
+      where: { key },
     })
-    if (!config) return 5
-    const pct = Number.parseInt(config.value, 10)
-    if (Number.isNaN(pct) || pct < 0 || pct > 100) return 5
+
+    if (!config) return defaultValue
+
+    try {
+      const parsed = parsePlatformConfig(config.value, config.type as 'number' | 'boolean' | 'string') as T
+      this.configCache.set(key, { value: parsed, expires: Date.now() + this.CACHE_TTL })
+      return parsed
+    } catch (err) {
+
+      this.logger.error(`Failed to parse config ${key}: ${String(err)}`)
+      return defaultValue
+    }
+  }
+
+  async getAdminFeePct(): Promise<number> {
+    const pct = await this.getConfig('admin_fee_percent', 5)
+    if (pct < 0 || pct > 100) return 5
     return pct
   }
+
+  async isPayoutEnabled(): Promise<boolean> {
+    return this.getConfig('payout_enabled', false)
+  }
+
+  clearCache(key?: string) {
+    if (key) {
+      this.configCache.delete(key)
+    } else {
+      this.configCache.clear()
+    }
+  }
+
+
+
 
   calculateSplit(totalPaisa: number, adminFeePct: number): { adminFee: number; ownerAmount: number } {
     const adminFee = Math.floor((totalPaisa * adminFeePct) / 100)
@@ -67,6 +106,12 @@ export class PayoutService {
   }
 
   async enqueuePayoutJob(payoutId: string): Promise<void> {
+    const enabled = await this.isPayoutEnabled()
+    if (!enabled) {
+      this.logger.warn(`Skipping payout ${payoutId}: payouts are globally disabled`)
+      return
+    }
+
     try {
       await this.payoutQueue.add(
         'process-payout',
@@ -85,7 +130,13 @@ export class PayoutService {
   }
 
   async adminRetryPayout(payoutId: string, _adminId: string): Promise<void> {
+    const enabled = await this.isPayoutEnabled()
+    if (!enabled) {
+      throw new BadRequestException('Payouts are currently disabled globally')
+    }
+
     const payout = await this.prisma.owner_payouts.findUnique({ where: { id: payoutId } })
+
     if (!payout) throw new NotFoundException('Payout not found')
     if (payout.status === 'SUCCESS') throw new BadRequestException('Payout is already successful')
 
