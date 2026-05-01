@@ -6,15 +6,18 @@
 // BullMQ: emails + admin-alerts queues (no notifications/sms/image queues).
 
 import { Module, MiddlewareConsumer, NestModule, RequestMethod } from '@nestjs/common'
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core'
 import { ConfigModule, ConfigService } from '@nestjs/config'
 import { JwtModule } from '@nestjs/jwt'
-import { ThrottlerModule } from '@nestjs/throttler'
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler'
 import { SentryModule } from '@sentry/nestjs/setup'
 
 import { PrismaModule } from '@futsmandu/database'
 import { QueuesModule } from '@futsmandu/queues'
 
 import { IpWhitelistMiddleware }   from './common/middleware/ip-whitelist.middleware.js'
+import { AbuseDetectionGuard } from './common/guards/abuse-detection.guard.js'
+import { AuditModule, AuditInterceptor, AuditService } from '@futsmandu/audit'
 import { AdminAuthModule }         from './modules/auth/auth.module.js'
 import { AdminUsersModule }        from './modules/players/players.module.js'
 import { AdminOwnersModule }       from './modules/owners/admin-owners.module.js'
@@ -39,6 +42,7 @@ import { ENV } from '@futsmandu/utils'
     SentryModule.forRoot(),
 
     PrismaModule,
+    AuditModule,
 
     // Admin JWT — 8h sessions, separate secret from owner and player
     JwtModule.register({
@@ -69,6 +73,24 @@ import { ENV } from '@futsmandu/utils'
       provide: 'SENTRY_DSN',
       useFactory: (config: ConfigService) => config.get<string>('SENTRY_DSN'),
       inject: [ConfigService],
+    },
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: AbuseDetectionGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useFactory: (auditService: AuditService) => new AuditInterceptor(auditService, {
+        actorType: 'ADMIN',
+        actorRole: 'ADMIN',
+        identityProperty: 'admin',
+        urlNamespace: 'admin',
+      }),
+      inject: [AuditService],
     },
   ],
 })
