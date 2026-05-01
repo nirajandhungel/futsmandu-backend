@@ -19,12 +19,30 @@ export class ProcessPayoutForBookingDto {
   bookingId!: string
 }
 
+export enum PlatformConfigType {
+  NUMBER = 'number',
+  BOOLEAN = 'boolean',
+  STRING = 'string',
+}
+
 export class UpdatePlatformConfigDto {
   @ApiProperty()
   @IsString()
   @MaxLength(100)
   value!: string
+
+  @ApiProperty({ enum: PlatformConfigType })
+  @IsEnum(PlatformConfigType)
+  type!: PlatformConfigType
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string
 }
+
+
 
 export class ListPayoutsQueryDto {
   @ApiPropertyOptional({ enum: PAYOUT_STATUS_VALUES })

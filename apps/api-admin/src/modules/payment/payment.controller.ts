@@ -62,6 +62,6 @@ export class AdminPaymentController {
   @Put('config/:key')
   @ApiOperation({ summary: 'Update payment platform config' })
   updateConfig(@Param('key') key: string, @CurrentAdmin() admin: { id: string }, @Body() dto: UpdatePlatformConfigDto) {
-    return this.adminPayment.updateConfig(key, dto.value, admin.id)
+    return this.adminPayment.updateConfig(key, dto, admin.id)
   }
 }
