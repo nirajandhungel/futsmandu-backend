@@ -45,4 +45,11 @@ export class AdminAnalyticsController {
   userGrowth(@Query('from') from?: string, @Query('to') to?: string) {
     return this.analytics.getUserGrowth({ from, to })
   }
+
+  @Get('audit-logs')
+  @ApiOperation({ summary: 'System-wide admin action logs' })
+  auditLogs(@Query('limit') limit?: number, @Query('cursor') cursor?: string) {
+    return this.analytics.getAuditLogs({ limit: limit ? +limit : undefined, cursor })
+  }
 }
+

@@ -137,7 +137,17 @@ export class AnalyticsService {
     return { players: groupDay(players), owners: groupDay(owners), totals: { players: players.length, owners: owners.length } }
   }
 
+  async getAuditLogs(query: { limit?: number; cursor?: string }) {
+    const limit = Math.min(query.limit || 20, 100)
+    return this.prisma.admin_audit_log.findMany({
+      take: limit,
+      ...(query.cursor ? { skip: 1, cursor: { id: query.cursor } } : {}),
+      orderBy: { created_at: 'desc' },
+    })
+  }
+
   private buildDateFilter(q: DateRangeQuery) {
+
     if (!q.from && !q.to) return {}
     return { booking_date: { ...(q.from ? { gte: new Date(q.from) } : {}), ...(q.to ? { lte: new Date(q.to) } : {}) } }
   }
