@@ -25,6 +25,12 @@ export class MatchController {
     return this.matchService.joinMatch(id, u.id, dto.position)
   }
 
+  @Post('invite/:token/join')
+  @HttpCode(HttpStatus.CREATED)
+  joinByInvite(@Param('token') token: string, @CurrentUser() u: AuthenticatedUser, @Body() dto: JoinMatchDto) {
+    return this.matchService.joinByInviteToken(token, u.id, dto.position)
+  }
+
   @Put('matches/:id/approve/:userId')
   approve(@Param('id', ParseUUIDPipe) id: string, @Param('userId', ParseUUIDPipe) userId: string, @CurrentUser() u: AuthenticatedUser) {
     return this.matchService.approveMember(id, u.id, userId)

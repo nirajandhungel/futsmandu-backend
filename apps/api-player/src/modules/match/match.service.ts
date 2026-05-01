@@ -59,13 +59,58 @@ export class MatchService {
   // H-5: Wrap count-check + insert in a transaction to prevent concurrent over-join.
   // Uses SELECT ... FOR UPDATE on match_groups to serialise join attempts.
   async joinMatch(matchId: string, playerId: string, position?: string) {
+    return this.joinMatchInternal(matchId, playerId, position)
+  }
+
+  async joinByInviteToken(token: string, playerId: string, position?: string) {
+    const match = await this.prisma.match_groups.findUnique({
+      where: { invite_token: token },
+      select: {
+        id: true,
+        token_expires_at: true,
+      },
+    })
+    if (!match) throw new NotFoundException('Invite link not found')
+    if (match.token_expires_at !== null && match.token_expires_at < new Date()) {
+      throw new NotFoundException('Invite link expired')
+    }
+    return this.joinMatchInternal(match.id, playerId, position, token)
+  }
+
+  private async joinMatchInternal(
+    matchId: string,
+    playerId: string,
+    position?: string,
+    inviteToken?: string,
+  ) {
     // Quick pre-checks outside the transaction (no lock, fast reads)
     const matchPrecheck = await this.prisma.match_groups.findUnique({
       where: { id: matchId },
-      select: { is_open: true, skill_filter: true, auto_accept: true, admin_id: true },
+      select: {
+        is_open: true,
+        join_mode: true,
+        skill_filter: true,
+        auto_accept: true,
+        admin_id: true,
+        invite_token: true,
+        token_expires_at: true,
+      },
     })
     if (!matchPrecheck)          throw new NotFoundException('Match not found')
     if (!matchPrecheck.is_open)  throw new ForbiddenException('Match is not open for joining')
+
+    const inviteTokenValid =
+      Boolean(inviteToken) &&
+      matchPrecheck.invite_token === inviteToken &&
+      (matchPrecheck.token_expires_at === null || matchPrecheck.token_expires_at > new Date())
+
+    if (matchPrecheck.join_mode === 'INVITE_ONLY' && !inviteTokenValid) {
+      throw new ForbiddenException('Invite token required for this match')
+    }
+    if (matchPrecheck.join_mode === 'FRIENDS_ONLY' && !inviteTokenValid) {
+      const isFriend = await this.isAcceptedFriendship(playerId, matchPrecheck.admin_id)
+      if (!isFriend) throw new ForbiddenException('Only friends can join this match')
+    }
 
     if (matchPrecheck.skill_filter) {
       const user = await this.prisma.users.findUnique({
@@ -125,6 +170,17 @@ export class MatchService {
       }
       return result.member
     })
+  }
+
+  private async isAcceptedFriendship(userA: string, userB: string) {
+    const friendship = await this.prisma.friendships.findFirst({
+      where: {
+        status: 'accepted',
+        OR: [{ requester_id: userA, recipient_id: userB }, { requester_id: userB, recipient_id: userA }],
+      },
+      select: { id: true },
+    })
+    return Boolean(friendship)
   }
 
   async approveMember(matchId: string, adminId: string, userId: string) {
