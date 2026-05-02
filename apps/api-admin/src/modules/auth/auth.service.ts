@@ -63,9 +63,15 @@ export class AdminAuthService {
       throw new ForbiddenException('Not an admin account')
     }
 
-    // 2FA placeholder — production requires TOTP code
-    if (ENV['NODE_ENV'] === 'production' && !dto.totpCode) {
-      throw new UnauthorizedException('2FA code required in production')
+    // 2FA — verify email OTP code in production
+    if (ENV['NODE_ENV'] === 'production') {
+      if (!dto.totpCode) {
+        throw new UnauthorizedException('2FA code (OTP) required in production')
+      }
+      const otpValid = await this.otpService.verifyOtp(admin.id, 'admin', dto.totpCode)
+      if (!otpValid.success) {
+        throw new UnauthorizedException(otpValid.message || 'Invalid 2FA code')
+      }
     }
 
     // Log admin login
