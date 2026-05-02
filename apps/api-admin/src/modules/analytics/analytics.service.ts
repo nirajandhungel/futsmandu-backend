@@ -1,7 +1,7 @@
 // apps/admin-api/src/modules/analytics/analytics.service.ts
 // Platform-wide analytics — no owner scoping.
 import { Injectable, Logger } from '@nestjs/common'
-import { PrismaService } from '@futsmandu/database'
+import { PrismaService, Prisma } from '@futsmandu/database'
 import { RedisService } from '@futsmandu/redis'
 
 interface DateRangeQuery { from?: string; to?: string }
@@ -91,21 +91,37 @@ export class AnalyticsService {
   }
 
   async getRevenue(query: RevenueQuery) {
-    const bookings = await this.prisma.bookings.findMany({
-      where: { status: { in: ['CONFIRMED', 'COMPLETED'] }, ...this.buildDateFilter(query) },
-      select: { booking_date: true, total_amount: true },
-      orderBy: { booking_date: 'asc' },
-    })
-    const grouped = new Map<string, number>()
-    for (const b of bookings) {
-      const key = this.groupKey(new Date(b.booking_date), query.groupBy ?? 'day')
-      grouped.set(key, (grouped.get(key) ?? 0) + b.total_amount)
-    }
+    const groupBy = query.groupBy ?? 'day'
+    
+    const conditions = [Prisma.sql`status IN ('CONFIRMED', 'COMPLETED')`]
+    if (query.from) conditions.push(Prisma.sql`booking_date >= ${new Date(query.from)}`)
+    if (query.to)   conditions.push(Prisma.sql`booking_date <= ${new Date(query.to)}`)
+    
+    const where = Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`
+    
+    const grouped = await this.prisma.$queryRaw<Array<{ period: Date; total: bigint }>>`
+      SELECT
+        DATE_TRUNC(${groupBy}::text, booking_date) AS period,
+        SUM(total_amount) AS total
+      FROM bookings
+      ${where}
+      GROUP BY 1
+      ORDER BY 1
+    `
+
     return {
-      groupBy: query.groupBy ?? 'day',
-      data: Array.from(grouped.entries()).map(([period, totalPaisa]) => ({
-        period, totalPaisa, totalNPR: (totalPaisa / 100).toFixed(2),
-      })),
+      groupBy,
+      data: grouped.map((row: { period: Date; total: bigint }) => {
+        let periodStr = row.period.toISOString().split('T')[0]!
+        if (groupBy === 'month') periodStr = periodStr.substring(0, 7)
+        if (groupBy === 'week')  periodStr = periodStr // keep standard date format for week start
+        const totalPaisa = Number(row.total || 0)
+        return {
+          period: periodStr,
+          totalPaisa,
+          totalNPR: (totalPaisa / 100).toFixed(2),
+        }
+      }),
     }
   }
 
@@ -119,22 +135,32 @@ export class AnalyticsService {
   }
 
   async getUserGrowth(query: DateRangeQuery) {
-    const f = query.from || query.to ? {
-      created_at: {
-        ...(query.from ? { gte: new Date(query.from) } : {}),
-        ...(query.to   ? { lte: new Date(query.to)   } : {}),
-      },
-    } : {}
-    const [players, owners] = await Promise.all([
-      this.prisma.users.findMany({ where: f, select: { created_at: true }, orderBy: { created_at: 'asc' } }),
-      this.prisma.owners.findMany({ where: f, select: { created_at: true }, orderBy: { created_at: 'asc' } }),
+    const conditions = [Prisma.sql`1=1`]
+    if (query.from) conditions.push(Prisma.sql`created_at >= ${new Date(query.from)}`)
+    if (query.to)   conditions.push(Prisma.sql`created_at <= ${new Date(query.to)}`)
+    const where = Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`
+
+    const [players, owners, playersCount, ownersCount] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ date: Date; count: bigint }>>`
+        SELECT DATE_TRUNC('day', created_at) AS date, COUNT(*) AS count
+        FROM users ${where} GROUP BY 1 ORDER BY 1
+      `,
+      this.prisma.$queryRaw<Array<{ date: Date; count: bigint }>>`
+        SELECT DATE_TRUNC('day', created_at) AS date, COUNT(*) AS count
+        FROM owners ${where} GROUP BY 1 ORDER BY 1
+      `,
+      this.prisma.users.count({ where: this.buildDateFilterCreatedAt(query) }),
+      this.prisma.owners.count({ where: this.buildDateFilterCreatedAt(query) }),
     ])
-    const groupDay = (rows: { created_at: Date }[]) => {
-      const m = new Map<string, number>()
-      for (const r of rows) { const k = r.created_at.toISOString().split('T')[0]!; m.set(k, (m.get(k) ?? 0) + 1) }
-      return Array.from(m.entries()).map(([date, count]) => ({ date, count }))
+
+    const mapGrowth = (rows: Array<{ date: Date; count: bigint }>) =>
+      rows.map(r => ({ date: r.date.toISOString().split('T')[0]!, count: Number(r.count) }))
+
+    return {
+      players: mapGrowth(players),
+      owners: mapGrowth(owners),
+      totals: { players: playersCount, owners: ownersCount }
     }
-    return { players: groupDay(players), owners: groupDay(owners), totals: { players: players.length, owners: owners.length } }
   }
 
   async getAuditLogs(query: { limit?: number; cursor?: string }) {
@@ -152,11 +178,8 @@ export class AnalyticsService {
     return { booking_date: { ...(q.from ? { gte: new Date(q.from) } : {}), ...(q.to ? { lte: new Date(q.to) } : {}) } }
   }
 
-  private groupKey(date: Date, groupBy: string): string {
-    if (groupBy === 'month') return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-    if (groupBy === 'week') {
-      const d = new Date(date); d.setDate(d.getDate() - d.getDay()); return d.toISOString().split('T')[0]!
-    }
-    return date.toISOString().split('T')[0]!
+  private buildDateFilterCreatedAt(q: DateRangeQuery) {
+    if (!q.from && !q.to) return {}
+    return { created_at: { ...(q.from ? { gte: new Date(q.from) } : {}), ...(q.to ? { lte: new Date(q.to) } : {}) } }
   }
 }
