@@ -74,9 +74,8 @@ function baseOpts(redisUrl: string): IORedis.RedisOptions {
       ['ETIMEDOUT', 'EPIPE', 'ECONNRESET', 'READONLY'].some(code =>
         err.message?.includes(code),
       ),
-    // TLS is mandatory for Upstash (rediss://).  rejectUnauthorized: false is
-    // safe here because Upstash uses a self-signed cert on the ioredis endpoint.
-    tls: /^rediss:\/\//i.test(redisUrl) ? { rejectUnauthorized: false } : undefined,
+    // TLS is mandatory for managed redis (rediss://). rejectUnauthorized should be true for production security.
+    tls: /^rediss:\/\//i.test(redisUrl) ? { rejectUnauthorized: true } : undefined,
   }
 }
 
