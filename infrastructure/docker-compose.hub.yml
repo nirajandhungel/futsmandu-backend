@@ -240,7 +240,7 @@ services:
       OTP_LENGTH:                 ${OTP_LENGTH:-6}
       ADMIN_API_PORT:             ${ADMIN_API_PORT:-3003}
     ports:
-      - "3003:3003"   # direct access: http://localhost:3003/api/v1/admin/...
+      - "127.0.0.1:3003:3003"   # direct access: http://localhost:3003/api/v1/admin/...
     networks:
       - futsmandu-network
     restart: unless-stopped
