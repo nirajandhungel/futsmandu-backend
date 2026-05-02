@@ -110,7 +110,7 @@ export class BookingLifecycleService {
     // ── 4. Serializable transaction — lock → validate → create ──────────────
     const lockKey = `${dto.courtId}:${dto.date}:${dto.startTime}`
 
-    const result = await this.prisma.$transaction(async (tx: any) => {
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Advisory lock — prevents concurrent requests for the same slot
       const [lock] = await tx.$queryRaw<[{ acquired: boolean }]>`
         SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})) AS acquired`
@@ -198,8 +198,9 @@ export class BookingLifecycleService {
         playersNeeded:      config.playersNeeded,
         description:        config.description,
       }
+      const bookingMetaSaved = { ...bookingMeta, selectedFriendIds: config.selectedFriendIds }
 
-      // Create booking — status CONFIRMED (direct-pay path, payment record created below)
+      // Create booking — status HELD
       const booking = await tx.bookings.create({
         data: {
           booking_source:      'PLAYER_SELF',
@@ -214,91 +215,29 @@ export class BookingLifecycleService {
           total_amount:        price,
           base_price:          price,
           applied_rule_id:     ruleId ?? null,
-          status:              'CONFIRMED',
-          hold_expires_at:     null,
-          payment_method:      'ESEWA',
+          status:              'HELD',
+          hold_expires_at:     new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
           created_by_user_id:  playerId,
-          booking_meta:        bookingMeta as Prisma.InputJsonValue,
+          booking_meta:        bookingMetaSaved as Prisma.InputJsonValue,
         },
       })
 
-      // Payment record (bypassed gateway — direct confirmation path)
-      await tx.payments.create({
-        data: {
-          booking_id:       booking.id,
-          player_id:        playerId,
-          amount:           price,
-          gateway:          'ESEWA',
-          payment_method:   'ESEWA',
-          status:           'SUCCESS',
-          gateway_tx_id:    `player-booking-${booking.id}`,
-          gateway_response: {
-            source:           'player_booking',
-            paymentBypassed:  true,
-            reason:           'Temporary direct booking confirmation without external gateway',
-          } as Prisma.InputJsonValue,
-          initiated_at:  new Date(),
-          completed_at:  new Date(),
-        },
-      })
-
-      // ── Create match_group from bookingMeta — single source of truth ───────
-      const matchGroup = await tx.match_groups.create({
-        data: {
-          booking_id:      booking.id,
-          venue_id:        court.venue_id,
-          court_id:        dto.courtId,
-          match_date:      booking.booking_date,
-          start_time:      booking.start_time,
-          end_time:        booking.end_time,
-          admin_id:        playerId,
-          max_players:     resolvedMaxPlayers,
-          min_players:     resolvedMaxPlayers,
-          is_open:         bookingMeta.joinMode === 'OPEN',
-          join_mode:       bookingMeta.joinMode,
-          auto_accept:     bookingMeta.bookingType === 'PARTIAL',
-          cost_split_mode: bookingMeta.costSplitMode,
-          description:     bookingMeta.description,
-        },
-      })
-
-      // Admin member
-      await tx.match_group_members.create({
-        data: {
-          match_group_id: matchGroup.id,
-          user_id:        playerId,
-          role:           'admin',
-          status:         'confirmed',
-        },
-      })
-
-      // Auto-add friends (if any)
-      if (config.selectedFriendIds.length > 0) {
-        await tx.match_group_members.createMany({
-          data: config.selectedFriendIds.map(friendId => ({
-            match_group_id: matchGroup.id,
-            user_id:        friendId,
-            role:           'player',
-            status:         'confirmed',
-            invited_by:     playerId,
-          })),
-        })
-      }
+      // Set redis hold to block concurrent views from showing AVAILABLE
+      const dateStr = dto.date.split('T')[0]!
+      await this.redis.set(
+        this.redis.keys.slotHold(dto.courtId, dateStr, dto.startTime),
+        playerId,
+        600 // 10 minutes
+      )
 
       return {
         ...booking,
-        paymentStatus:  'SUCCESS',
+        paymentStatus:  'PENDING',
         displayAmount:  formatPaisa(price),
-        matchGroup,
       }
-    }, { isolationLevel: 'Serializable', maxWait: 1500, timeout: 5000 })
-
+    }, { isolationLevel: 'ReadCommitted', maxWait: 1500, timeout: 5000 })
     // ── Post-transaction side-effects (non-critical, best-effort) ───────────
-    const player = await this.prisma.users.findUnique({
-      where:  { id: playerId },
-      select: { email: true, name: true },
-    })
-    await this.enqueueBookingConfirmedJobs(result.id, playerId, player)
+    // removed enqueueBookingConfirmedJobs since this is now just HELD
 
     // Log booking
     void this.audit.log({
@@ -315,6 +254,9 @@ export class BookingLifecycleService {
         context: 'Direct Booking',
       },
     })
+
+    const dateStr = dto.date.split('T')[0]!
+    await this.redis.del(`slotgrid:${dto.courtId}:${dateStr}`)
 
     return result
   }
@@ -343,7 +285,7 @@ export class BookingLifecycleService {
       throw new ConflictException('Payment amount does not match booking')
     }
 
-    const result = await this.prisma.$transaction(async (tx: any) => {
+    const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Update payment
       await tx.payments.update({
         where: { booking_id: bookingId },
@@ -393,12 +335,26 @@ export class BookingLifecycleService {
         data: { match_group_id: matchGroup.id, user_id: confirmed.player_id!, role: 'admin', status: 'confirmed' },
       })
 
+      const friendIds = (meta as any).selectedFriendIds || [];
+      if (friendIds.length > 0) {
+        await tx.match_group_members.createMany({
+          data: friendIds.map((friendId: string) => ({
+            match_group_id: matchGroup.id,
+            user_id:        friendId,
+            role:           'player',
+            status:         'confirmed',
+            invited_by:     confirmed.player_id!,
+          })),
+        })
+      }
+
       return { confirmed, matchGroup }
     }, { isolationLevel: 'ReadCommitted', maxWait: 5000, timeout: 15000 })
 
     // Clear redis hold
     const dateStr = result.confirmed.booking_date.toISOString().split('T')[0]!
     await this.redis.del(this.redis.keys.slotHold(booking.court_id, dateStr, booking.start_time))
+    await this.redis.del(`slotgrid:${booking.court_id}:${dateStr}`)
 
     const player = await this.prisma.users.findUnique({
       where:  { id: booking.player_id! },
@@ -443,7 +399,7 @@ export class BookingLifecycleService {
     const existingPayment = await this.prisma.payments.findUnique({ where: { booking_id: bookingId } })
     if (existingPayment) return existingPayment
 
-    return this.prisma.$transaction(async (tx: any) => {
+    return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const payment = await tx.payments.create({
         data: {
           booking_id:     bookingId,
@@ -470,11 +426,11 @@ export class BookingLifecycleService {
   // ─── cancelBooking ─────────────────────────────────────────────────────────
 
   async cancelBooking(bookingId: string, cancelledBy: string, reason?: string) {
-    const txResult = await this.prisma.$transaction(async (tx: any) => {
+    const txResult = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       // Row-level lock — prevents concurrent cancel + expiry race
       const rows = await tx.$queryRaw<
-        Array<{ id: string; status: string; total_amount: number; venue_id: string; booking_date: Date; start_time: string; player_id: string | null }>
-      >`SELECT id, status, total_amount, venue_id, booking_date, start_time, player_id
+        Array<{ id: string; status: string; total_amount: number; venue_id: string; booking_date: Date; start_time: string; player_id: string | null; court_id: string }>
+      >`SELECT id, status, total_amount, venue_id, booking_date, start_time, player_id, court_id
         FROM bookings WHERE id = ${bookingId}::uuid FOR UPDATE NOWAIT`
 
       const booking = rows[0]
@@ -524,10 +480,13 @@ export class BookingLifecycleService {
         })
       }
 
-      return { refundAmount, refundPct, refundNote }
+      return { refundAmount, refundPct, refundNote, court_id: booking.court_id, booking_date: booking.booking_date }
     }, { isolationLevel: 'RepeatableRead', maxWait: 3000, timeout: 10000 })
 
-    const { refundAmount, refundPct, refundNote } = txResult
+    const { refundAmount, refundPct, refundNote, court_id, booking_date } = txResult
+    const dateStr = booking_date.toISOString().split('T')[0]!
+    await this.redis.del(`slotgrid:${court_id}:${dateStr}`)
+
     if (refundAmount > 0) {
       await this.refundQueue.add(
         'process-refund',
@@ -570,11 +529,16 @@ export class BookingLifecycleService {
 
     const dateStr = booking.booking_date.toISOString().split('T')[0]!
     await this.redis.del(this.redis.keys.slotHold(booking.court_id, dateStr, booking.start_time))
+    await this.redis.del(`slotgrid:${booking.court_id}:${dateStr}`)
   }
 
   // ─── getSlotGrid ───────────────────────────────────────────────────────────
 
   async getSlotGrid(courtId: string, date: string): Promise<SlotGridItem[]> {
+    const cacheKey = `slotgrid:${courtId}:${date}`
+    const cached = await this.redis.get<SlotGridItem[]>(cacheKey)
+    if (cached) return cached
+
     const court = await this.prisma.courts.findUnique({
       where:  { id: courtId, is_active: true },
       select: { open_time: true, close_time: true, slot_duration_mins: true },
@@ -621,9 +585,11 @@ export class BookingLifecycleService {
       this.redis.mget<string>(...slots.map(s => this.redis.keys.slotHold(courtId, date, s.startTime))),
     ])
 
-    return slots.map((slot, i): SlotGridItem => {
+    const norm = (t: string) => t.length === 4 ? `0${t}` : t;
+
+    const grid = slots.map((slot, i): SlotGridItem => {
       const isBlocked = blocks.some(
-        b => b.start_time < slot.endTime && b.end_time > slot.startTime,
+        b => norm(b.start_time) < norm(slot.endTime) && norm(b.end_time) > norm(slot.startTime),
       )
       // Blocked slots map to CONFIRMED — the public controller remaps non-AVAILABLE/OPEN_TO_JOIN
       // statuses to 'UNAVAILABLE' before sending to unauthenticated callers.
@@ -632,7 +598,7 @@ export class BookingLifecycleService {
       }
 
       const booking = activeBookings.find(
-        b => b.start_time < slot.endTime && b.end_time > slot.startTime,
+        b => norm(b.start_time) < norm(slot.endTime) && norm(b.end_time) > norm(slot.startTime),
       )
       if (booking) {
         const status: SlotGridItem['status'] =
@@ -648,33 +614,28 @@ export class BookingLifecycleService {
 
       return { startTime: slot.startTime, endTime: slot.endTime, status: 'AVAILABLE' }
     })
+
+    await this.redis.set(cacheKey, grid, 30)
+    return grid
   }
 
   // ─── getBookings ───────────────────────────────────────────────────────────
 
   async getBookings(playerId: string, query: BookingQueryDto) {
     const take = Math.min(query.limit ?? 20, 50)
-    const page = query.page ?? 1
 
-    let createdAtCursor: Date | undefined
-    if (query.cursor) {
-      try {
-        createdAtCursor = new Date(Buffer.from(query.cursor, 'base64').toString('utf-8'))
-        if (isNaN(createdAtCursor.getTime())) createdAtCursor = undefined
-      } catch {
-        createdAtCursor = undefined
-      }
+    if (query.cursor && query.page) {
+      throw new BadRequestException('Cannot provide both cursor and page')
     }
 
     const bookings = await this.prisma.bookings.findMany({
       where: {
         player_id: playerId,
         ...(query.status       ? { status:     query.status }              : {}),
-        ...(createdAtCursor    ? { created_at: { lt: createdAtCursor } }   : {}),
       },
       orderBy: { created_at: 'desc' },
       take,
-      skip:    createdAtCursor ? 0 : (page - 1) * take,
+      ...(query.cursor ? { skip: 1, cursor: { id: query.cursor } } : { skip: (query.page ? query.page - 1 : 0) * take }),
       select: {
         id: true, status: true, booking_date: true, start_time: true, end_time: true,
         total_amount: true, hold_expires_at: true, refund_status: true, refund_amount: true, created_at: true,
@@ -689,9 +650,7 @@ export class BookingLifecycleService {
     })
 
     const lastItem  = bookings.length === take ? bookings[bookings.length - 1] : undefined
-    const nextCursor = lastItem
-      ? Buffer.from(lastItem.created_at.toISOString()).toString('base64')
-      : null
+    const nextCursor = lastItem ? lastItem.id : null
 
     return {
       data: bookings.map((b: any) => ({ ...b, displayAmount: formatPaisa(b.total_amount) })),
