@@ -12,20 +12,8 @@ import {
 import { PrismaService } from '@futsmandu/database'
 import { InjectQueue } from '@nestjs/bullmq'
 import { Queue } from 'bullmq'
-import { MediaService } from '@futsmandu/media'
+import { MediaService, extractKeyFromCdnUrl } from '@futsmandu/media'
 import { ENV } from '@futsmandu/utils'
-
-function extractKeyFromCdnUrl(cdnUrl: string): string {
-  const base = ENV['S3_CDN_BASE_URL'] || ENV['S3_ENDPOINT'] || ''
-  if (base && cdnUrl.startsWith(base)) {
-    return cdnUrl.slice(base.replace(/\/+$/, '').length + 1)
-  }
-  try {
-    return new URL(cdnUrl).pathname.replace(/^\//, '')
-  } catch {
-    return cdnUrl
-  }
-}
 
 @Injectable()
 export class AdminVenuesService {
