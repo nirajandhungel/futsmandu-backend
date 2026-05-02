@@ -9,20 +9,8 @@
 
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common'
 import { PrismaService } from '@futsmandu/database'
-import { MediaService } from '@futsmandu/media'
+import { MediaService, extractKeyFromCdnUrl } from '@futsmandu/media'
 import { ENV } from '@futsmandu/utils'
-
-function extractKeyFromCdnUrl(cdnUrl: string): string {
-  const base = ENV['S3_CDN_BASE_URL'] || ENV['S3_ENDPOINT'] || ''
-  if (base && cdnUrl.startsWith(base)) {
-    return cdnUrl.slice(base.replace(/\/+$/, '').length + 1)
-  }
-  try {
-    return new URL(cdnUrl).pathname.replace(/^\//, '')
-  } catch {
-    return cdnUrl
-  }
-}
 
 @Injectable()
 export class VenueService {
@@ -48,14 +36,15 @@ export class VenueService {
       orderBy: [{ avg_rating: 'desc' }, { total_reviews: 'desc' }],
     })
 
-    // Batch-presign all cover images in one parallel burst (not per-venue serial awaits)
-    const coverSignedUrls = await Promise.all(
-      venues.map((v: typeof venues[number]) =>
-        v.cover_image_url
-          ? this.media.getImageUrl(extractKeyFromCdnUrl(v.cover_image_url)).catch(() => null)
-          : Promise.resolve(null)
-      )
-    )
+    const coverSignedUrls = ENV.USE_SIGNED_IMAGE_URLS === 'true'
+      ? await Promise.all(
+          venues.map((v: typeof venues[number]) =>
+            v.cover_image_url
+              ? this.media.getImageUrl(extractKeyFromCdnUrl(v.cover_image_url)).catch(() => null)
+              : Promise.resolve(null)
+          )
+        )
+      : [];
 
     return venues.map((v: typeof venues[number], i: number) => ({
       ...v,
@@ -89,15 +78,12 @@ export class VenueService {
     })
     if (!venue) throw new NotFoundException('Venue not found')
 
-    // Signed cover URL
-    const cover_image_signed_url = venue.cover_image_url
-      ? await this.media.getImageUrl(
-          extractKeyFromCdnUrl(venue.cover_image_url),
-        ).catch(() => null)
-      : null
-
-    // Gallery images with signed URLs
-    const gallery = await this.media.getGallery(id)
+    const [cover_image_signed_url, gallery] = await Promise.all([
+      ENV.USE_SIGNED_IMAGE_URLS === 'true' && venue.cover_image_url
+        ? this.media.getImageUrl(extractKeyFromCdnUrl(venue.cover_image_url)).catch(() => null)
+        : Promise.resolve(null),
+      this.media.getGallery(id)
+    ])
     const gallery_images = gallery.map(img => ({
       asset_id:   img.assetId,
       cdn_url:    img.cdnUrl,
@@ -114,12 +100,11 @@ export class VenueService {
   }
 
   async writeReview(venueId: string, playerId: string, bookingId: string, rating: number, comment?: string) {
-    const booking = await this.prisma.bookings.findUnique({
-      where:  { id: bookingId },
-      select: { player_id: true, venue_id: true, status: true },
+    const booking = await this.prisma.bookings.findFirst({
+      where:  { id: bookingId, player_id: playerId },
+      select: { venue_id: true, status: true },
     })
     if (!booking)                           throw new NotFoundException('Booking not found')
-    if (booking.player_id !== playerId)     throw new BadRequestException('Not your booking')
     if (booking.venue_id !== venueId)       throw new BadRequestException('Venue mismatch')
     if (booking.status !== 'COMPLETED')     throw new BadRequestException('Can only review completed bookings')
 
