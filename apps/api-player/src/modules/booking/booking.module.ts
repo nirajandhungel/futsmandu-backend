@@ -6,9 +6,10 @@ import { BookingMatchService } from './booking-match.service.js'
 import { BookingController } from './booking.controller.js'
 import { QueuesModule } from '@futsmandu/queues'
 import { EsewaPayoutModule } from '@futsmandu/esewa-payout'
+import { AuditModule } from '@futsmandu/audit'
 
 @Module({
-  imports: [QueuesModule, EsewaPayoutModule],
+  imports: [QueuesModule, EsewaPayoutModule, AuditModule],
   providers: [BookingService, BookingLifecycleService, BookingMatchService],
   controllers: [BookingController],
   exports: [BookingService],
