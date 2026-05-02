@@ -183,14 +183,14 @@ export class DiscoveryService {
         is_open: true,
         ...(params.date  ? { match_date: toDateOnly(new Date(params.date)) } : {}),
         ...(params.skill ? { skill_filter: params.skill as 'beginner' | 'intermediate' | 'advanced' } : {}),
-        ...(params.cursor ? { id: { gt: params.cursor } } : {}),
       },
       include: {
         members: { where: { status: 'confirmed' }, select: { user_id: true } },
         venue: { select: { id: true, name: true, cover_image_url: true, address: true } },
       },
-      orderBy: [{ match_date: 'asc' }, { start_time: 'asc' }],
+      orderBy: [{ match_date: 'asc' }, { start_time: 'asc' }, { id: 'asc' }],
       take: limit,
+      ...(params.cursor ? { skip: 1, cursor: { id: params.cursor } } : {}),
     })
   }
 
