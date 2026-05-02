@@ -64,7 +64,7 @@ async function bootstrap(): Promise<void> {
       : HAS_PINO_PRETTY
         ? { level: 'info', transport: { target: 'pino-pretty', options: { colorize: true } } }
         : { level: 'info' },
-    trustProxy: true,
+    trustProxy: '172.20.0.0/16',
     bodyLimit: 1_048_576, // 1MB — admin never uploads large files
     requestTimeout: 30_000,
     connectionTimeout: 60_000,
