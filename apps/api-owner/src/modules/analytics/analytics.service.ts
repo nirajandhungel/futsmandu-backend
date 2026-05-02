@@ -2,7 +2,7 @@
 // Results cached in Redis at venue:{venueId}:kpis with 900s TTL.
 // All queries scoped to ownerId — zero cross-owner data leakage.
 import { Injectable, Logger } from '@nestjs/common'
-import { PrismaService } from '@futsmandu/database'
+import { PrismaService, Prisma } from '@futsmandu/database'
 import { RedisService } from '@futsmandu/redis'
 
 interface DateRangeQuery {
@@ -101,32 +101,43 @@ export class AnalyticsService {
 
   // ── Revenue grouped by day/week/month ────────────────────────────────────
   async getRevenue(ownerId: string, query: RevenueQuery) {
-    const venueIds   = await this.getOwnerVenueIds(ownerId)
-    const dateFilter = this.buildDateFilter(query)
-
-    const bookings = await this.prisma.bookings.findMany({
-      where: {
-        venue_id: { in: venueIds },
-        status:   { in: ['CONFIRMED', 'COMPLETED'] },
-        ...dateFilter,
-      },
-      select: { booking_date: true, total_amount: true },
-      orderBy: { booking_date: 'asc' },
-    })
-
-    const grouped = new Map<string, number>()
-    for (const b of bookings) {
-      const key = this.groupKey(new Date(b.booking_date), query.groupBy ?? 'day')
-      grouped.set(key, (grouped.get(key) ?? 0) + b.total_amount)
-    }
+    const venueIds = await this.getOwnerVenueIds(ownerId)
+    if (venueIds.length === 0) return { groupBy: query.groupBy ?? 'day', data: [] }
+    
+    const groupBy = query.groupBy ?? 'day'
+    
+    const conditions = [
+      Prisma.sql`status IN ('CONFIRMED', 'COMPLETED')`,
+      Prisma.sql`venue_id IN (${Prisma.join(venueIds)})`
+    ]
+    if (query.from) conditions.push(Prisma.sql`booking_date >= ${new Date(query.from)}`)
+    if (query.to)   conditions.push(Prisma.sql`booking_date <= ${new Date(query.to)}`)
+    
+    const where = Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`
+    
+    const grouped = await this.prisma.$queryRaw<Array<{ period: Date; total: bigint }>>`
+      SELECT
+        DATE_TRUNC(${groupBy}::text, booking_date) AS period,
+        SUM(total_amount) AS total
+      FROM bookings
+      ${where}
+      GROUP BY 1
+      ORDER BY 1
+    `
 
     return {
-      groupBy: query.groupBy ?? 'day',
-      data: Array.from(grouped.entries()).map(([period, totalPaisa]) => ({
-        period,
-        totalPaisa,
-        totalNPR: (totalPaisa / 100).toFixed(2),
-      })),
+      groupBy,
+      data: grouped.map((row: { period: Date; total: bigint }) => {
+        let periodStr = row.period.toISOString().split('T')[0]!
+        if (groupBy === 'month') periodStr = periodStr.substring(0, 7)
+        if (groupBy === 'week')  periodStr = periodStr // keep standard date format for week start
+        const totalPaisa = Number(row.total || 0)
+        return {
+          period: periodStr,
+          totalPaisa,
+          totalNPR: (totalPaisa / 100).toFixed(2),
+        }
+      }),
     }
   }
 
@@ -203,15 +214,5 @@ export class AnalyticsService {
     if (query.from) filter.gte = new Date(query.from)
     if (query.to)   filter.lte = new Date(query.to)
     return { booking_date: filter }
-  }
-
-  private groupKey(date: Date, groupBy: string): string {
-    if (groupBy === 'month') return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-    if (groupBy === 'week') {
-      const startOfWeek = new Date(date)
-      startOfWeek.setDate(date.getDate() - date.getDay())
-      return startOfWeek.toISOString().split('T')[0]!
-    }
-    return date.toISOString().split('T')[0]!
   }
 }
