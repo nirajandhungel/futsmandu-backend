@@ -28,6 +28,8 @@ import { AdminModerationModule }   from './modules/review-and-moderation/admin-m
 import { AdminAnalyticsModule }    from './modules/analytics/analytics.module.js'
 import { AdminHealthModule }       from './modules/health/health.module.js'
 import { AdminPaymentModule } from './modules/payment/payment.module.js'
+import { AdminMatchesModule } from './modules/matches/admin-matches.module.js'
+import { AdminSystemLogsModule } from './modules/system-logs/system-logs.module.js'
 import { ENV } from '@futsmandu/utils'
 
 
@@ -67,6 +69,8 @@ import { ENV } from '@futsmandu/utils'
     AdminAnalyticsModule,
     AdminPaymentModule,
     AdminHealthModule,
+    AdminMatchesModule,
+    AdminSystemLogsModule,
   ],
   providers: [
     {
