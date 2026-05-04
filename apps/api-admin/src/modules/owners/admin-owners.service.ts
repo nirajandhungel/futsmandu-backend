@@ -108,19 +108,7 @@ export class AdminOwnersService {
     })
     if (!owner) throw new NotFoundException('Owner not found')
 
-    const docTypes = ['citizenship', 'pan', 'business_reg']
-    const urls = await Promise.all(
-      docTypes.map(async (docType) => {
-        try {
-          const urlData = await this.media.getKycDocUrl(ownerId, docType, 600)
-          return { type: docType, url: urlData.downloadUrl }
-        } catch {
-          return { type: docType, url: null }
-        }
-      })
-    )
-
-    return urls
+    return this.media.getAllKycDocUrls(ownerId, 600)
   }
 
   async approveKyc(adminId: string, ownerId: string) {
