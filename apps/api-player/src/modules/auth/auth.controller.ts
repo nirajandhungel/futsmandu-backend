@@ -8,8 +8,8 @@
 // C-7: /auth/refresh validates Origin header as defence-in-depth against CSRF.
 
 import {
-  Controller, Post, Body, Res, Req, HttpCode, HttpStatus,
-  UnauthorizedException,
+  Controller, Post, Get, Body, Res, Req, HttpCode, HttpStatus,
+  UnauthorizedException, HttpException,
 } from '@nestjs/common'
 import { ApiTags, ApiOperation } from '@nestjs/swagger'
 import type { FastifyReply, FastifyRequest } from 'fastify'
@@ -21,11 +21,13 @@ import {
 import { Public } from '@futsmandu/auth'
 import { ENV } from '@futsmandu/utils'
 
+// Path must cover all `/api/v1/player/*` proxied calls so the browser always sends
+// the refresh cookie to the Player API (Vite dev proxy, mobile web, etc.).
 const COOKIE_OPTS = {
   httpOnly: true,
   secure: ENV['NODE_ENV'] === 'production',
   sameSite: 'strict' as const,
-  path: '/api/v1/player/auth/refresh',
+  path: '/api/v1/player',
   maxAge: 7 * 24 * 60 * 60,
 }
 
@@ -37,12 +39,15 @@ const ALLOWED_ORIGINS = new Set<string>(
         ENV['APP_URL'] ?? 'https://futsmandu.app',
         'https://futsmandu.app',
         'https://www.futsmandu.app',
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
       ]
     : [
         'http://localhost:3000',
         'http://localhost:3001',
         'http://127.0.0.1:3000',
-        // Allow undefined origin (e.g. Postman/curl in dev)
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
       ],
 )
 
@@ -109,6 +114,16 @@ export class AuthController {
     const ip = req.ip
     const userAgent = req.headers['user-agent']
     return this.authService.resendOtp(dto.userId, ip, userAgent)
+  }
+
+  @Public()
+  @Get('refresh')
+  @ApiOperation({ summary: 'GET is not supported — use POST /auth/refresh' })
+  refreshWrongMethod(): never {
+    throw new HttpException(
+      'Use POST with credentials to refresh tokens (GET is not supported).',
+      HttpStatus.METHOD_NOT_ALLOWED,
+    )
   }
 
   @Public()

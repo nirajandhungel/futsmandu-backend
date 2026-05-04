@@ -11,6 +11,8 @@ import './instrument.js'
 // Fails fast at startup if any required env var is missing.
 
 import * as zlib from 'node:zlib'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { NestFactory, Reflector } from '@nestjs/core'
 import {
   FastifyAdapter,
@@ -21,6 +23,7 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger'
 import fastifyHelmet from '@fastify/helmet'
 import fastifyCookie from '@fastify/cookie'
 import fastifyCompress from '@fastify/compress'
+import fastifyStatic from '@fastify/static'
 import { AppModule } from './app.module.js'
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js'
 import { ResponseInterceptor } from './common/interceptors/response.interceptor.js'
@@ -106,14 +109,22 @@ async function bootstrap(): Promise<void> {
 
   await app.register(fastifyCookie as any)
 
+  const prodCorsOrigins = [
+    ENV.APP_URL,
+    'https://futsmandu.app',
+    'https://www.futsmandu.app',
+    'https://owner.futsmandu.app',
+    'https://player.futsmandu.app',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ].filter(Boolean) as string[]
+
   app.enableCors({
-    origin: IS_PROD
-  ? [
-      'https://futsmandu.app',
-      'https://owner.futsmandu.app',
-      'https://player.futsmandu.app'
-    ]
-  : true,
+    // Dev: reflect request origin so Flutter web, Vite, and device LAN IPs all work.
+    // Prod: explicit list; mobile native apps are not browser CORS-limited.
+    origin: IS_PROD ? prodCorsOrigins : true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   })
@@ -147,6 +158,26 @@ async function bootstrap(): Promise<void> {
     const document = SwaggerModule.createDocument(app, config)
     SwaggerModule.setup('api/docs', app, document)
     new Logger('Swagger').log('📖 Docs: http://localhost:3001/api/docs')
+  }
+
+  await app.init()
+
+  const webRoot = ENV.PLAYER_WEB_ROOT?.trim()
+  if (webRoot && existsSync(webRoot)) {
+    const fastify = app.getHttpAdapter().getInstance()
+    await fastify.register(fastifyStatic as any, {
+      root: resolve(webRoot),
+      prefix: '/',
+    })
+    fastify.setNotFoundHandler((request, reply) => {
+      const urlPath = request.url.split('?')[0] ?? ''
+      if (urlPath.startsWith('/api')) {
+        void reply.status(404).send({ error: 'Not found', code: 'NOT_FOUND' })
+        return
+      }
+      return reply.sendFile('index.html')
+    })
+    new Logger('Bootstrap').log(`🌐 Player web UI → ${resolve(webRoot)}`)
   }
 
   await app.listen(PORT, HOST)

@@ -73,6 +73,19 @@ export const ENV = {
   SENTRY_RELEASE:            process.env['SENTRY_RELEASE']            ?? process.env['npm_package_version'],
   SENTRY_TRACES_SAMPLE_RATE: process.env['SENTRY_TRACES_SAMPLE_RATE'] ?? '0.1',
 
+  // ── Player web (Vite build output; optional static hosting from Player API) ──
+  PLAYER_WEB_ROOT: process.env['PLAYER_WEB_ROOT'] ?? '',
+
+  // ── Discovery (feeds when client omits lat/lng) ─────────────────────────────
+  DISCOVERY_DEFAULT_LAT: (() => {
+    const n = Number.parseFloat(process.env['DISCOVERY_DEFAULT_LAT'] ?? '')
+    return Number.isFinite(n) ? n : 27.7172
+  })(),
+  DISCOVERY_DEFAULT_LNG: (() => {
+    const n = Number.parseFloat(process.env['DISCOVERY_DEFAULT_LNG'] ?? '')
+    return Number.isFinite(n) ? n : 85.324
+  })(),
+
   // ── Ports ─────────────────────────────────────────────────────────────────
   PLAYER_API_PORT: process.env['PLAYER_API_PORT'] ?? '3001',
   OWNER_API_PORT:  process.env['OWNER_API_PORT']  ?? '3002',

@@ -15,12 +15,19 @@ import type { FastifyReply } from 'fastify'
 import { DiscoveryService } from './discovery.service.js'
 import { CurrentUser, Public } from '@futsmandu/auth'
 import type { AuthenticatedUser } from '@futsmandu/types'
+import { ENV } from '@futsmandu/utils'
 
 // ── Query DTOs ────────────────────────────────────────────────────────────────
 
+// Default map centre — from ENV (falls back to Kathmandu in env.config).
+const DEFAULT_LAT = ENV.DISCOVERY_DEFAULT_LAT
+const DEFAULT_LNG = ENV.DISCOVERY_DEFAULT_LNG
+
 class GeoQueryDto {
-  @IsNumber() @Min(-90)  @Max(90)  @Type(() => Number) lat!: number
-  @IsNumber() @Min(-180) @Max(180) @Type(() => Number) lng!: number
+  @IsOptional()
+  @IsNumber() @Min(-90)  @Max(90)  @Type(() => Number) lat?: number
+  @IsOptional()
+  @IsNumber() @Min(-180) @Max(180) @Type(() => Number) lng?: number
 }
 
 class OpenMatchesQueryDto {
@@ -48,7 +55,9 @@ export class DiscoveryController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
     reply.header('Cache-Control', 'private, max-age=30')
-    return this.discoveryService.getTonightFeed(u.id, geo.lat, geo.lng)
+    const lat = geo.lat ?? DEFAULT_LAT
+    const lng = geo.lng ?? DEFAULT_LNG
+    return this.discoveryService.getTonightFeed(u.id, lat, lng)
   }
 
   // Tomorrow feed — cache 60s (less time-sensitive)
@@ -59,7 +68,9 @@ export class DiscoveryController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
     reply.header('Cache-Control', 'private, max-age=60')
-    return this.discoveryService.getTomorrowFeed(u.id, geo.lat, geo.lng)
+    const lat = geo.lat ?? DEFAULT_LAT
+    const lng = geo.lng ?? DEFAULT_LNG
+    return this.discoveryService.getTomorrowFeed(u.id, lat, lng)
   }
 
   // Weekend feed — cache 120s (mostly static over hours)
@@ -70,7 +81,9 @@ export class DiscoveryController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
     reply.header('Cache-Control', 'private, max-age=120')
-    return this.discoveryService.getWeekendFeed(u.id, geo.lat, geo.lng)
+    const lat = geo.lat ?? DEFAULT_LAT
+    const lng = geo.lng ?? DEFAULT_LNG
+    return this.discoveryService.getWeekendFeed(u.id, lat, lng)
   }
 
   // Open matches — public, CDN-cacheable for 30s
