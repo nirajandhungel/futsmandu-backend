@@ -616,7 +616,7 @@ export class MediaService {
           media_asset_type.OWNER_BUSINESS_REGISTRATION,
           media_asset_type.OWNER_PAN,
         ]},
-        ...(docType ? { file_key: { contains: `_${docType}.` } } : {}),
+        ...(docType ? { file_key: { contains: `/${docType}.` } } : {}),
         deleted_at: null,
       },
       orderBy: { created_at: 'desc' },
