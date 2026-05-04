@@ -100,8 +100,8 @@ async function bootstrap(): Promise<void> {
   ? ['https://admin.futsmandu.app']
   : [
       'http://localhost',
-      'http://localhost:3000',
-      'http://localhost:3003'
+      'http://localhost:5173',
+      'http://localhost:5174'
     ],
     credentials: true, // Required for HTTP-only cookie auth
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
