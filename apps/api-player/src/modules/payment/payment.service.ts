@@ -158,18 +158,32 @@ export class PaymentService {
   async initiateKhalti(bookingId: string, playerId: string) {
     const booking = await this.prisma.bookings.findUnique({
       where: { id: bookingId },
-      select: { id: true, player_id: true, total_amount: true, status: true, payment: { select: { id: true, status: true } } },
+      select: {
+        id: true,
+        player_id: true,
+        status: true,
+        total_amount: true,
+        deposit_amount: true,
+        remaining_amount: true,
+        pay_status: true,
+        payment: { select: { id: true, status: true, amount: true } },
+      },
     })
     if (!booking) throw new NotFoundException('Booking not found')
     if (booking.player_id !== playerId) throw new ConflictException('Not your booking')
+
     return {
-      paymentDisabled: true,
-      message: 'Player payment is temporarily disabled. Booking is confirmed directly during booking.',
+      paymentBypassed: true,
+      message: 'Online gateway payment is bypassed. Deposit is recorded manually in booking ledger.',
       bookingId: booking.id,
       bookingStatus: booking.status,
-      amount: booking.total_amount,
+      payStatus: booking.pay_status,
+      totalAmount: booking.total_amount,
+      depositAmount: booking.deposit_amount,
+      remainingAmount: booking.remaining_amount,
       paymentId: booking.payment?.id ?? null,
       paymentStatus: booking.payment?.status ?? null,
+      paidAmount: booking.payment?.amount ?? booking.deposit_amount,
     }
   }
 
@@ -196,18 +210,32 @@ export class PaymentService {
   async initiateEsewa(bookingId: string, playerId: string) {
     const booking = await this.prisma.bookings.findUnique({
       where: { id: bookingId },
-      select: { id: true, player_id: true, total_amount: true, status: true, payment: { select: { id: true, status: true } } },
+      select: {
+        id: true,
+        player_id: true,
+        status: true,
+        total_amount: true,
+        deposit_amount: true,
+        remaining_amount: true,
+        pay_status: true,
+        payment: { select: { id: true, status: true, amount: true } },
+      },
     })
     if (!booking) throw new NotFoundException('Booking not found')
     if (booking.player_id !== playerId) throw new ConflictException('Not your booking')
+
     return {
-      paymentDisabled: true,
-      message: 'Player payment is temporarily disabled. Booking is confirmed directly during booking.',
+      paymentBypassed: true,
+      message: 'Online gateway payment is bypassed. Deposit is recorded manually in booking ledger.',
       bookingId: booking.id,
       bookingStatus: booking.status,
-      amount: booking.total_amount,
+      payStatus: booking.pay_status,
+      totalAmount: booking.total_amount,
+      depositAmount: booking.deposit_amount,
+      remainingAmount: booking.remaining_amount,
       paymentId: booking.payment?.id ?? null,
       paymentStatus: booking.payment?.status ?? null,
+      paidAmount: booking.payment?.amount ?? booking.deposit_amount,
     }
   }
 

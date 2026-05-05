@@ -161,6 +161,10 @@ async createOfflineBooking(ownerId: string, staffId: string, dto: CreateOfflineB
     this.logger.warn(`No pricing rule for court ${dto.court_id} — booking at 0 price`)
   }
 
+  // Offline/walk-in bookings are fully paid at the counter
+  const depositAmount  = totalAmount
+  const remainingAmount = 0
+
   const booking = await this.prisma.bookings.create({
     data: {
       booking_source:         'OFFLINE_COUNTER',
@@ -174,9 +178,13 @@ async createOfflineBooking(ownerId: string, staffId: string, dto: CreateOfflineB
       end_time:               endTime,
       duration_mins:          court.slot_duration_mins,
       total_amount:           totalAmount,
+      deposit_amount:         depositAmount,
+      remaining_amount:       remainingAmount,
       base_price:             totalAmount,
       applied_rule_id:        appliedRuleId,
       status:                 'CONFIRMED',
+      pay_status:             'PAID',
+      hold_expires_at:        null,
       offline_customer_name:  dto.customer_name,
       offline_customer_phone: dto.customer_phone,
       offline_notes:          dto.notes ?? null,
@@ -187,7 +195,8 @@ async createOfflineBooking(ownerId: string, staffId: string, dto: CreateOfflineB
     select: {
       id: true, booking_source: true, payment_method: true, status: true,
       start_time: true, end_time: true, booking_date: true,
-      total_amount: true, offline_customer_name: true,
+      total_amount: true, deposit_amount: true, remaining_amount: true,
+      pay_status: true, offline_customer_name: true,
     },
   })
 
@@ -223,11 +232,12 @@ async createOfflineBooking(ownerId: string, staffId: string, dto: CreateOfflineB
           booking_name: true,
           status: true,
           booking_date: true, start_time: true, end_time: true,
-          total_amount: true, offline_customer_name: true,
+          total_amount: true, deposit_amount: true, remaining_amount: true, pay_status: true, offline_customer_name: true,
           offline_customer_phone: true, created_at: true,
           player: { select: { id: true, name: true, phone: true } },
           court:  { select: { id: true, name: true } },
           venue:  { select: { id: true, name: true } },
+          payment: { select: { id: true, status: true, amount: true, payment_method: true } },
         },
         orderBy: [{ booking_date: 'desc' }, { start_time: 'asc' }],
         skip,
@@ -237,13 +247,96 @@ async createOfflineBooking(ownerId: string, staffId: string, dto: CreateOfflineB
     ])
 
     return {
-      data: bookings,
+      data: bookings.map((b: any) => ({
+        ...b,
+        displayAmount:    formatPaisa(b.total_amount),
+        displayDeposit:   formatPaisa(b.deposit_amount ?? 0),
+        displayRemaining: formatPaisa(b.remaining_amount ?? 0),
+      })),
       meta: {
         page,
         limit:      PAGE_SIZE,
         total,
         totalPages: Math.ceil(total / PAGE_SIZE),
       },
+    }
+  }
+
+  // ── Get single booking detail ──────────────────────────────────────────────
+  // Provides owner with full financial breakdown: deposit, remaining, payment, payout.
+  async getBookingDetail(ownerId: string, bookingId: string) {
+    const booking = await this.prisma.bookings.findFirst({
+      where: {
+        id:         bookingId,
+        venue:      { owner_id: ownerId },
+        deleted_at: null,
+      },
+      select: {
+        id: true,
+        booking_source: true,
+        payment_method: true,
+        booking_name: true,
+        status: true,
+        pay_status: true,
+        booking_date: true,
+        start_time: true,
+        end_time: true,
+        duration_mins: true,
+        total_amount: true,
+        deposit_amount: true,
+        remaining_amount: true,
+        base_price: true,
+        offline_customer_name: true,
+        offline_customer_phone: true,
+        offline_notes: true,
+        created_at: true,
+        updated_at: true,
+        player: { select: { id: true, name: true, phone: true, email: true } },
+        court:  { select: { id: true, name: true, court_type: true } },
+        venue:  { select: { id: true, name: true } },
+        payment: {
+          select: {
+            id: true,
+            amount: true,
+            status: true,
+            payment_method: true,
+            gateway: true,
+            gateway_tx_id: true,
+            initiated_at: true,
+            completed_at: true,
+            payout: {
+              select: {
+                id: true,
+                owner_amount: true,
+                admin_fee: true,
+                admin_fee_pct: true,
+                status: true,
+                completed_at: true,
+                resolution_note: true,
+              },
+            },
+          },
+        },
+        match_group: {
+          select: {
+            id: true,
+            is_open: true,
+            max_players: true,
+            members: {
+              where: { deleted_at: null },
+              select: { user_id: true, role: true, status: true },
+            },
+          },
+        },
+      },
+    })
+    if (!booking) throw new NotFoundException('Booking not found or access denied')
+
+    return {
+      ...booking,
+      displayAmount:    formatPaisa(booking.total_amount),
+      displayDeposit:   formatPaisa(booking.deposit_amount ?? 0),
+      displayRemaining: formatPaisa(booking.remaining_amount ?? 0),
     }
   }
 

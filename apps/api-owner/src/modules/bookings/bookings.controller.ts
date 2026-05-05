@@ -36,6 +36,12 @@ export class BookingsController {
     return this.bookings.listBookings(owner.id, query)
   }
 
+  @Get(':id')
+  @ApiOperation({ summary: 'Get booking detail with deposit, remaining, payment and payout info' })
+  detail(@CurrentOwner() owner: AuthOwner, @Param('id') bookingId: string) {
+    return this.bookings.getBookingDetail(owner.id, bookingId)
+  }
+
   @Put(':id/attendance')
   @ApiOperation({ summary: 'Mark no-shows for a booking' })
   markAttendance(
