@@ -9,7 +9,7 @@ import type { Prisma } from '@futsmandu/database'
 import { PayoutService } from '@futsmandu/esewa-payout'
 import { RedisService } from '@futsmandu/redis'
 import { AuditService } from '@futsmandu/audit'
-import { calculatePrice, addMinutesToTime, hoursUntilSlot, formatPaisa } from '@futsmandu/utils'
+import { calculatePrice, addMinutesToTime, hoursUntilSlot, formatNPR } from '@futsmandu/utils'
 import type { SlotGridItem, GatewayVerification } from '@futsmandu/types'
 import type { HoldSlotDto, BookingQueryDto } from './dto/booking.dto.js'
 
@@ -187,6 +187,13 @@ export class BookingLifecycleService {
         dto.courtId, dto.date, dto.startTime,
       )
 
+      // ── Deposit calculation ────────────────────────────────────────────────
+      // Fetch deposit percentage from platform_config (default 20%)
+      const depositConfig = await tx.platform_config.findUnique({ where: { key: 'deposit_pct' } })
+      const depositPct = depositConfig ? Number(depositConfig.value) : 20
+      const depositAmount = Math.round((price * depositPct) / 100)
+      const remainingAmount = price - depositAmount
+
       // ── Build bookingMeta ONCE — this is the canonical record ──────────────
       // match_groups will be seeded from this; never re-derive join/split mode.
       const bookingMeta: BookingMeta = {
@@ -213,9 +220,12 @@ export class BookingLifecycleService {
           end_time:            endTime,
           duration_mins:       court.slot_duration_mins,
           total_amount:        price,
+          deposit_amount:      depositAmount,
+          remaining_amount:    remainingAmount,
           base_price:          price,
           applied_rule_id:     ruleId ?? null,
           status:              'HELD',
+          pay_status:          'PENDING',
           hold_expires_at:     new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
           created_by_user_id:  playerId,
           booking_meta:        bookingMetaSaved as Prisma.InputJsonValue,
@@ -232,8 +242,10 @@ export class BookingLifecycleService {
 
       return {
         ...booking,
-        paymentStatus:  'PENDING',
-        displayAmount:  formatPaisa(price),
+        paymentStatus:   'PENDING',
+        displayAmount:   formatNPR(price),
+        displayDeposit:  formatNPR(depositAmount),
+        displayRemaining: formatNPR(remainingAmount),
       }
     }, { isolationLevel: 'ReadCommitted', maxWait: 1500, timeout: 5000 })
     // ── Post-transaction side-effects (non-critical, best-effort) ───────────
@@ -267,22 +279,25 @@ export class BookingLifecycleService {
     const booking = await this.prisma.bookings.findUnique({
       where:  { id: bookingId },
       select: {
-        total_amount:  true,
-        status:        true,
-        player_id:     true,
-        court_id:      true,
-        venue_id:      true,
-        booking_date:  true,
-        start_time:    true,
-        booking_meta:  true,
-        payment:       { select: { id: true } },
-        venue:         { select: { owner: { select: { id: true, esewa_id: true } } } },
+        total_amount:     true,
+        deposit_amount:   true,
+        remaining_amount: true,
+        status:           true,
+        player_id:        true,
+        court_id:         true,
+        venue_id:         true,
+        booking_date:     true,
+        start_time:       true,
+        booking_meta:     true,
+        payment:          { select: { id: true } },
+        venue:            { select: { owner: { select: { id: true, esewa_id: true } } } },
       },
     })
     if (!booking)                              throw new NotFoundException('Booking not found')
     if (booking.status !== 'PENDING_PAYMENT')  throw new ConflictException(`Booking is ${booking.status}`)
-    if (verified.amount !== booking.total_amount) {
-      throw new ConflictException('Payment amount does not match booking')
+    // Verify against deposit amount (player pays deposit online, remaining offline)
+    if (verified.amount !== booking.deposit_amount) {
+      throw new ConflictException('Payment amount does not match deposit')
     }
 
     const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -297,10 +312,10 @@ export class BookingLifecycleService {
         },
       })
 
-      // Confirm booking
+      // Confirm booking — deposit paid, remaining owed
       const confirmed = await tx.bookings.update({
         where: { id: bookingId, status: 'PENDING_PAYMENT' },
-        data:  { status: 'CONFIRMED', hold_expires_at: null, updated_at: new Date() },
+        data:  { status: 'CONFIRMED', pay_status: 'DEPOSIT_PAID', hold_expires_at: null, updated_at: new Date() },
       })
 
       // ── Read match_group config exclusively from booking_meta ─────────────
@@ -386,7 +401,7 @@ export class BookingLifecycleService {
   async initiatePayment(bookingId: string, gateway: 'KHALTI' | 'ESEWA', playerId: string) {
     const booking = await this.prisma.bookings.findUnique({
       where:  { id: bookingId },
-      select: { status: true, player_id: true, total_amount: true, hold_expires_at: true },
+      select: { status: true, player_id: true, total_amount: true, deposit_amount: true, hold_expires_at: true },
     })
     if (!booking)                          throw new NotFoundException('Booking not found')
     if (booking.player_id !== playerId)    throw new ForbiddenException('Not your booking')
@@ -399,12 +414,15 @@ export class BookingLifecycleService {
     const existingPayment = await this.prisma.payments.findUnique({ where: { booking_id: bookingId } })
     if (existingPayment) return existingPayment
 
+    // Payment is for the deposit amount, not the full total
+    const paymentAmount = booking.deposit_amount > 0 ? booking.deposit_amount : booking.total_amount
+
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const payment = await tx.payments.create({
         data: {
           booking_id:     bookingId,
           player_id:      playerId,
-          amount:         booking.total_amount,
+          amount:         paymentAmount,
           gateway,
           payment_method: gateway,
           status:         'INITIATED',
@@ -510,7 +528,7 @@ export class BookingLifecycleService {
       },
     })
 
-    return { refundAmount, refundPct, displayRefund: formatPaisa(refundAmount), refundNote }
+    return { refundAmount, refundPct, displayRefund: formatNPR(refundAmount), refundNote }
   }
 
   // ─── expireBooking ─────────────────────────────────────────────────────────
@@ -638,7 +656,8 @@ export class BookingLifecycleService {
       ...(query.cursor ? { skip: 1, cursor: { id: query.cursor } } : { skip: (query.page ? query.page - 1 : 0) * take }),
       select: {
         id: true, status: true, booking_date: true, start_time: true, end_time: true,
-        total_amount: true, hold_expires_at: true, refund_status: true, refund_amount: true, created_at: true,
+        total_amount: true, deposit_amount: true, remaining_amount: true, pay_status: true,
+        hold_expires_at: true, refund_status: true, refund_amount: true, created_at: true,
         court: {
           select: {
             id: true, name: true, court_type: true,
@@ -653,7 +672,12 @@ export class BookingLifecycleService {
     const nextCursor = lastItem ? lastItem.id : null
 
     return {
-      data: bookings.map((b: any) => ({ ...b, displayAmount: formatPaisa(b.total_amount) })),
+      data: bookings.map((b: any) => ({
+        ...b,
+        displayAmount:    formatNPR(b.total_amount),
+        displayDeposit:   formatNPR(b.deposit_amount ?? 0),
+        displayRemaining: formatNPR(b.remaining_amount ?? 0),
+      })),
       meta: { nextCursor, limit: take },
     }
   }
@@ -691,7 +715,12 @@ export class BookingLifecycleService {
     })
     if (!booking)                          throw new NotFoundException('Booking not found')
     if (booking.player_id !== playerId)    throw new ForbiddenException('Access denied')
-    return { ...booking, displayAmount: formatPaisa(booking.total_amount) }
+    return {
+      ...booking,
+      displayAmount:    formatNPR(booking.total_amount),
+      displayDeposit:   formatNPR(booking.deposit_amount ?? 0),
+      displayRemaining: formatNPR(booking.remaining_amount ?? 0),
+    }
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────
