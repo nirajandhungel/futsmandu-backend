@@ -7,7 +7,7 @@
 // packages/utils/src/pricing-engine.ts
 // Dynamic pricing engine — evaluates rules highest-priority-first.
 // Rule types: base(1) < offpeak(5) < weekend(8) < peak(10) < lastminute(15) < custom(20)
-// All prices in PAISA (NPR × 100). Never use floating point for money.
+// All prices in NPR. Never use floating point for money (use integers).
 
 import type { PricingResult } from '@futsmandu/types'
 
