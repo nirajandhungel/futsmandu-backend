@@ -67,11 +67,11 @@ export class PayoutService {
 
 
 
-  calculateSplit(totalPaisa: number, adminFeePct: number): { adminFee: number; ownerAmount: number } {
-    const adminFee = Math.floor((totalPaisa * adminFeePct) / 100)
+  calculateSplit(totalAmount: number, adminFeePct: number): { adminFee: number; ownerAmount: number } {
+    const adminFee = Math.floor((totalAmount * adminFeePct) / 100)
     return {
       adminFee,
-      ownerAmount: totalPaisa - adminFee,
+      ownerAmount: totalAmount - adminFee,
     }
   }
 
@@ -81,7 +81,7 @@ export class PayoutService {
     ownerId: string
     venueId: string
     ownerEsewaId: string
-    totalPaisa: number
+    totalAmount: number
     adminFee: number
     ownerAmount: number
     adminFeePct: number
@@ -93,7 +93,7 @@ export class PayoutService {
         owner_id: params.ownerId,
         venue_id: params.venueId,
         owner_esewa_id: params.ownerEsewaId,
-        total_collected: params.totalPaisa,
+        total_collected: params.totalAmount,
         admin_fee: params.adminFee,
         owner_amount: params.ownerAmount,
         admin_fee_pct: params.adminFeePct,
