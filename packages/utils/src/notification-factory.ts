@@ -14,7 +14,7 @@ export class NotificationFactory {
       case 'BOOKING_CANCELLED':
         return {
           title: '❌ Booking Cancelled',
-          body: `Booking at ${String(ctx['venueName'])} cancelled.${ctx['refundAmount'] ? ` Refund NPR ${Number(ctx['refundAmount']) / 100} initiated.` : ''}`,
+          body: `Booking at ${String(ctx['venueName'])} cancelled.${ctx['refundAmount'] ? ` Refund NPR ${Number(ctx['refundAmount'])} initiated.` : ''}`,
           data: { bookingId: String(ctx['bookingId']), screen: 'BookingDetail' },
           sendSms: true,
         }
