@@ -1,5 +1,5 @@
 import {
-  Injectable, Logger,
+  Injectable, Logger, NotFoundException, BadRequestException,
 } from '@nestjs/common'
 import { PrismaService } from '@futsmandu/database'
 import type { booking_status, booking_source } from '@futsmandu/database'
@@ -184,5 +184,96 @@ export class AdminBookingService {
       totalDeposits: gross._sum.deposit_amount ?? 0,
       totalRemaining: gross._sum.remaining_amount ?? 0,
     }
+  }
+
+  /**
+   * Get full booking detail with deposit, remaining, payment, and payout status.
+   */
+  async getBookingDetail(bookingId: string) {
+    const booking = await this.prisma.bookings.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        booking_source: true,
+        payment_method: true,
+        booking_name: true,
+        status: true,
+        pay_status: true,
+        booking_date: true,
+        start_time: true,
+        end_time: true,
+        duration_mins: true,
+        total_amount: true,
+        deposit_amount: true,
+        remaining_amount: true,
+        base_price: true,
+        refund_status: true,
+        refund_amount: true,
+        offline_customer_name: true,
+        offline_customer_phone: true,
+        offline_notes: true,
+        created_at: true,
+        updated_at: true,
+        player:  { select: { id: true, name: true, email: true, phone: true } },
+        venue:   { select: { id: true, name: true, slug: true } },
+        court:   { select: { id: true, name: true } },
+        payment: {
+          select: {
+            id: true, amount: true, status: true, payment_method: true,
+            gateway: true, gateway_tx_id: true,
+            initiated_at: true, completed_at: true,
+            payout: {
+              select: {
+                id: true, owner_amount: true, admin_fee: true,
+                admin_fee_pct: true, status: true, completed_at: true,
+                resolution_note: true,
+              },
+            },
+          },
+        },
+        match_group: {
+          select: {
+            id: true, is_open: true, max_players: true,
+            members: {
+              where: { deleted_at: null },
+              select: { user_id: true, role: true, status: true },
+            },
+          },
+        },
+      },
+    })
+    if (!booking) throw new NotFoundException('Booking not found')
+    return booking
+  }
+
+  /**
+   * Mark a CONFIRMED booking as COMPLETED.
+   * Required before admin can trigger owner payout.
+   */
+  async markBookingCompleted(bookingId: string, adminId: string) {
+    const booking = await this.prisma.bookings.findUnique({
+      where: { id: bookingId },
+      select: { id: true, status: true, booking_date: true, start_time: true },
+    })
+    if (!booking) throw new NotFoundException('Booking not found')
+    if (booking.status !== 'CONFIRMED') {
+      throw new BadRequestException(`Cannot complete a ${booking.status} booking`)
+    }
+
+    // Only past bookings can be completed
+    const slotDate = new Date(booking.booking_date)
+    const today = new Date()
+    today.setUTCHours(0, 0, 0, 0)
+    if (slotDate >= today) {
+      throw new BadRequestException('Can only mark past bookings as completed')
+    }
+
+    await this.prisma.bookings.update({
+      where: { id: bookingId },
+      data: { status: 'COMPLETED', updated_at: new Date() },
+    })
+
+    this.logger.log(`Booking ${bookingId} marked COMPLETED by admin ${adminId}`)
+    return { message: 'Booking marked as completed', bookingId }
   }
 }

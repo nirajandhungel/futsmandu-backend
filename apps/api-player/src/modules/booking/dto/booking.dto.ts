@@ -116,6 +116,16 @@ export class HoldSlotDto {
   @IsString()
   @MaxLength(80)
   bookingName?: string
+
+  @ApiPropertyOptional({
+    minimum: 0,
+    description: 'Deposit amount paid now. Remaining will be computed as total - deposit.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  depositAmount?: number
 }
 
 export class CancelBookingDto {

@@ -108,7 +108,7 @@ export class AnalyticsService {
     
     const conditions = [
       Prisma.sql`status IN ('CONFIRMED', 'COMPLETED')`,
-      Prisma.sql`venue_id IN (${Prisma.join(venueIds)})`
+      Prisma.sql`venue_id IN (${Prisma.join(venueIds.map(id => Prisma.sql`${id}::uuid`))})`
     ]
     if (query.from) conditions.push(Prisma.sql`booking_date >= ${new Date(query.from)}`)
     if (query.to)   conditions.push(Prisma.sql`booking_date <= ${new Date(query.to)}`)

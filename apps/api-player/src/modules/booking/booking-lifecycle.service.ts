@@ -187,11 +187,19 @@ export class BookingLifecycleService {
         dto.courtId, dto.date, dto.startTime,
       )
 
-      // ── Deposit calculation ────────────────────────────────────────────────
-      // Fetch deposit percentage from platform_config (default 20%)
-      const depositConfig = await tx.platform_config.findUnique({ where: { key: 'deposit_pct' } })
-      const depositPct = depositConfig ? Number(depositConfig.value) : 20
-      const depositAmount = Math.round((price * depositPct) / 100)
+      // ── Deposit calculation (manual-entry first) ───────────────────────────
+      // Current product mode bypasses gateway collection; we still persist
+      // deposit/remaining for owner/admin visibility and manual settlement.
+      let depositAmount = dto.depositAmount ?? 0
+      if (dto.depositAmount == null) {
+        // Fallback to config-driven default when user does not provide deposit.
+        const depositConfig = await tx.platform_config.findUnique({ where: { key: 'deposit_pct' } })
+        const depositPct = depositConfig ? Number(depositConfig.value) : 20
+        depositAmount = Math.round((price * depositPct) / 100)
+      }
+      if (depositAmount < 0 || depositAmount > price) {
+        throw new BadRequestException(`depositAmount must be between 0 and total amount (${price})`)
+      }
       const remainingAmount = price - depositAmount
 
       // ── Build bookingMeta ONCE — this is the canonical record ──────────────
@@ -207,7 +215,7 @@ export class BookingLifecycleService {
       }
       const bookingMetaSaved = { ...bookingMeta, selectedFriendIds: config.selectedFriendIds }
 
-      // Create booking — status HELD
+      // Create booking in bypass mode — confirmed immediately.
       const booking = await tx.bookings.create({
         data: {
           booking_source:      'PLAYER_SELF',
@@ -224,21 +232,68 @@ export class BookingLifecycleService {
           remaining_amount:    remainingAmount,
           base_price:          price,
           applied_rule_id:     ruleId ?? null,
-          status:              'HELD',
-          pay_status:          'PENDING',
-          hold_expires_at:     new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+          status:              'CONFIRMED',
+          pay_status:          depositAmount > 0 ? (remainingAmount === 0 ? 'PAID' : 'DEPOSIT_PAID') : 'PENDING',
+          hold_expires_at:     null,
           created_by_user_id:  playerId,
           booking_meta:        bookingMetaSaved as Prisma.InputJsonValue,
         },
       })
 
-      // Set redis hold to block concurrent views from showing AVAILABLE
-      const dateStr = dto.date.split('T')[0]!
-      await this.redis.set(
-        this.redis.keys.slotHold(dto.courtId, dateStr, dto.startTime),
-        playerId,
-        600 // 10 minutes
-      )
+      // Persist a payment ledger row even in bypass mode so admin/owner can
+      // track deposited amount and remaining collection consistently.
+      await tx.payments.create({
+        data: {
+          booking_id: booking.id,
+          player_id: playerId,
+          amount: depositAmount,
+          payment_method: 'CASH',
+          status: 'SUCCESS',
+          gateway_tx_id: `MANUAL-${booking.id.slice(0, 8)}`,
+          gateway_response: {
+            bypass: true,
+            source: 'player-hold-bypass',
+            depositedAmount: depositAmount,
+          } as Prisma.InputJsonValue,
+          completed_at: new Date(),
+        },
+      })
+
+      const maxPlayers = bookingMeta.maxPlayers || court.capacity || 10
+      const matchGroup = await tx.match_groups.create({
+        data: {
+          booking_id:      booking.id,
+          venue_id:        booking.venue_id,
+          court_id:        booking.court_id,
+          match_date:      booking.booking_date,
+          start_time:      booking.start_time,
+          end_time:        booking.end_time,
+          admin_id:        playerId,
+          max_players:     maxPlayers,
+          min_players:     maxPlayers,
+          is_open:         bookingMeta.joinMode === 'OPEN',
+          join_mode:       bookingMeta.joinMode,
+          auto_accept:     bookingMeta.bookingType === 'PARTIAL',
+          cost_split_mode: bookingMeta.costSplitMode,
+          description:     bookingMeta.description,
+        },
+      })
+
+      await tx.match_group_members.create({
+        data: { match_group_id: matchGroup.id, user_id: playerId, role: 'admin', status: 'confirmed' },
+      })
+
+      if (config.selectedFriendIds.length > 0) {
+        await tx.match_group_members.createMany({
+          data: config.selectedFriendIds.map((friendId: string) => ({
+            match_group_id: matchGroup.id,
+            user_id:        friendId,
+            role:           'player',
+            status:         'confirmed',
+            invited_by:     playerId,
+          })),
+        })
+      }
 
       return {
         ...booking,
@@ -249,7 +304,11 @@ export class BookingLifecycleService {
       }
     }, { isolationLevel: 'ReadCommitted', maxWait: 1500, timeout: 5000 })
     // ── Post-transaction side-effects (non-critical, best-effort) ───────────
-    // removed enqueueBookingConfirmedJobs since this is now just HELD
+    const player = await this.prisma.users.findUnique({
+      where:  { id: playerId },
+      select: { email: true, name: true },
+    })
+    await this.enqueueBookingConfirmedJobs(result.id, playerId, player)
 
     // Log booking
     void this.audit.log({
@@ -607,7 +666,7 @@ export class BookingLifecycleService {
 
     const grid = slots.map((slot, i): SlotGridItem => {
       const isBlocked = blocks.some(
-        b => norm(b.start_time) < norm(slot.endTime) && norm(b.end_time) > norm(slot.startTime),
+        (b: BlockRangeRow) => norm(b.start_time) < norm(slot.endTime) && norm(b.end_time) > norm(slot.startTime),
       )
       // Blocked slots map to CONFIRMED — the public controller remaps non-AVAILABLE/OPEN_TO_JOIN
       // statuses to 'UNAVAILABLE' before sending to unauthenticated callers.
@@ -616,7 +675,7 @@ export class BookingLifecycleService {
       }
 
       const booking = activeBookings.find(
-        b => norm(b.start_time) < norm(slot.endTime) && norm(b.end_time) > norm(slot.startTime),
+        (b: ActiveBookingRow) => norm(b.start_time) < norm(slot.endTime) && norm(b.end_time) > norm(slot.startTime),
       )
       if (booking) {
         const status: SlotGridItem['status'] =
