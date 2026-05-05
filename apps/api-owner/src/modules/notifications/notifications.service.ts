@@ -44,7 +44,7 @@ function buildOwnerNotification(
     case 'PAYMENT_RECEIVED':
       return {
         title: '💰 Payment Received',
-        body: `NPR ${Number(ctx['amountPaisa']) / 100} received for ${String(ctx['courtName'])}`,
+        body: `NPR ${Number(ctx['amountNPR'] ?? ctx['amountPaisa'] ?? 0)} received for ${String(ctx['courtName'])}`,
         data: { bookingId: String(ctx['bookingId']), screen: 'Analytics' },
         sendSms: false,
       }
