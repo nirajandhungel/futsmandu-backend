@@ -10,7 +10,7 @@ import { AdminJwtGuard } from '../../common/guards/jwt.guard.js'
 @UseGuards(AdminJwtGuard)
 @Controller('analytics')
 export class AdminAnalyticsController {
-  constructor(private readonly analytics: AnalyticsService) {}
+  constructor(private readonly analytics: AnalyticsService) { }
 
   @Get('platform')
   @ApiOperation({ summary: 'Platform-wide KPIs — total bookings, revenue, users' })
@@ -48,8 +48,8 @@ export class AdminAnalyticsController {
 
   @Get('audit-logs')
   @ApiOperation({ summary: 'System-wide admin action logs' })
-  auditLogs(@Query('limit') limit?: number, @Query('cursor') cursor?: string) {
-    return this.analytics.getAuditLogs({ limit: limit ? +limit : undefined, cursor })
+  auditLogs(@Query('limit') limit?: number, @Query('skip') skip?: number) {
+    return this.analytics.getAuditLogs({ limit: limit ? +limit : undefined, skip: skip ? +skip : undefined })
   }
 }
 
