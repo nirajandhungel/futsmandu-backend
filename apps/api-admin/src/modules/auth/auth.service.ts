@@ -74,17 +74,7 @@ export class AdminAuthService {
       }
     }
 
-    // Log admin login
-    void this.audit.logAdminAction({
-      adminId: admin.id,
-      action: 'Auth Login',
-      targetType: 'admins',
-      targetId: admin.id,
-      metadata: {
-        email: admin.email,
-        context: 'Dashboard Login',
-      },
-    })
+
 
     return {
       accessToken: this.signAdminAccess(admin.id, admin.email, adminRole),
