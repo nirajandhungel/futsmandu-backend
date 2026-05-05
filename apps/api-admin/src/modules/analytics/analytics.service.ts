@@ -40,8 +40,7 @@ export class AnalyticsService {
       bookings: {
         byStatus: Object.fromEntries(bookingStats.map((b: any) => [b.status, b._count.id])),
         confirmed: revenueStats._count.id,
-        totalRevenuePaisa: revenueStats._sum.total_amount ?? 0,
-        totalRevenueNPR:   ((revenueStats._sum.total_amount ?? 0) / 100).toFixed(2),
+        totalRevenueNPR:   (revenueStats._sum.total_amount ?? 0).toLocaleString('en-NP', { minimumFractionDigits: 2 }),
       },
     }
     await this.redis.set(cacheKey, result, this.CACHE_TTL)
@@ -71,19 +70,19 @@ export class AnalyticsService {
     ])
 
     // Build a fast O(1) lookup map from the single aggregation result
-    const revenueMap = new Map<string, { bookings: number, totalPaisa: number }>(
+    const revenueMap = new Map<string, { bookings: number, totalNPR: number }>(
       revenueByVenue.map((r: any) => [
         r.venue_id,
-        { bookings: r._count.id, totalPaisa: r._sum.total_amount ?? 0 },
+        { bookings: r._count.id, totalNPR: r._sum.total_amount ?? 0 },
       ]),
     )
 
     const data = venues.map((v: any) => {
-      const stats = revenueMap.get(v.id) ?? { bookings: 0, totalPaisa: 0 }
+      const stats = revenueMap.get(v.id) ?? { bookings: 0, totalNPR: 0 }
       return {
         ...v,
         bookings:   stats.bookings,
-        revenueNPR: (stats.totalPaisa / 100).toFixed(2),
+        revenueNPR: (stats.totalNPR).toLocaleString('en-NP', { minimumFractionDigits: 2 }),
       }
     })
 
@@ -115,11 +114,11 @@ export class AnalyticsService {
         let periodStr = row.period.toISOString().split('T')[0]!
         if (groupBy === 'month') periodStr = periodStr.substring(0, 7)
         if (groupBy === 'week')  periodStr = periodStr // keep standard date format for week start
-        const totalPaisa = Number(row.total || 0)
+        const totalAmount = Number(row.total || 0)
         return {
           period: periodStr,
-          totalPaisa,
-          totalNPR: (totalPaisa / 100).toFixed(2),
+          totalAmount,
+          totalNPR: totalAmount.toLocaleString('en-NP', { minimumFractionDigits: 2 }),
         }
       }),
     }
@@ -163,13 +162,22 @@ export class AnalyticsService {
     }
   }
 
-  async getAuditLogs(query: { limit?: number; cursor?: string }) {
-    const limit = Math.min(query.limit || 20, 100)
-    return this.prisma.admin_audit_log.findMany({
-      take: limit,
-      ...(query.cursor ? { skip: 1, cursor: { id: query.cursor } } : {}),
-      orderBy: { created_at: 'desc' },
-    })
+  async getAuditLogs(query: { limit?: number; skip?: number; actor_type?: any }) {
+    const limit = Math.min(query.limit || 20, 100);
+    const skip  = query.skip || 0;
+    const where = query.actor_type ? { actor_type: query.actor_type } : {};
+
+    const [items, total] = await Promise.all([
+      this.prisma.user_activity_log.findMany({
+        where,
+        take: limit,
+        skip,
+        orderBy: { created_at: 'desc' },
+      }),
+      this.prisma.user_activity_log.count({ where }),
+    ]);
+
+    return { items, total };
   }
 
   private buildDateFilter(q: DateRangeQuery) {
