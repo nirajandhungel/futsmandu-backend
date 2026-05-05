@@ -14,15 +14,26 @@ export class AdminSystemLogsController {
 
   @Get()
   @ApiOperation({ summary: 'List system audit logs' })
-  async list(@Query('page') page?: number, @Query('limit') limit?: number) {
+  async list(
+    @Query('page') page?: number, 
+    @Query('limit') limit?: number,
+    @Query('actor_type') actorType?: string
+  ) {
+    const pageNum = page ? +page : 1;
     const limitNum = limit ? +limit : 20;
-    const items = await this.analytics.getAuditLogs({ limit: limitNum });
+    const skip = (pageNum - 1) * limitNum;
+
+    const { items, total } = await this.analytics.getAuditLogs({ 
+      limit: limitNum, 
+      skip,
+      actor_type: actorType && actorType !== 'all' ? actorType.toUpperCase() : undefined 
+    });
     
     return {
       items,
-      page: page ? +page : 1,
-      totalPages: 1, // Placeholder for real pagination
-      totalItems: items.length,
+      page: pageNum,
+      totalPages: Math.ceil(total / limitNum),
+      totalItems: total,
     };
   }
 }
