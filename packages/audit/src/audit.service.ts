@@ -13,14 +13,6 @@ export interface AuditLogParams {
   metadata?: Record<string, any>
 }
 
-export interface AdminAuditParams {
-  adminId: string
-  action: string
-  targetId?: string
-  targetType?: string
-  metadata?: Record<string, any>
-}
-
 @Injectable()
 export class AuditService {
   private readonly logger = new Logger(AuditService.name)
@@ -30,7 +22,7 @@ export class AuditService {
   ) {}
 
   /**
-   * Log a general user, owner, or system activity.
+   * Log a user, owner, admin or system activity to the unified user_activity_log.
    */
   async log(params: AuditLogParams) {
     try {
@@ -51,42 +43,6 @@ export class AuditService {
       })
     } catch (err) {
       this.logger.error(`Failed to enqueue activity log: ${String(err)}`)
-    }
-  }
-
-  /**
-   * Log a sensitive admin operation to the dedicated admin audit trail.
-   * Also records a shadow entry in the general activity log for unification.
-   */
-  async logAdminAction(params: AdminAuditParams) {
-    try {
-      await this.auditQueue.add('write', {
-        adminAudit: {
-          adminId: params.adminId,
-          action: params.action,
-          targetId: params.targetId,
-          targetType: params.targetType,
-          metadata: params.metadata ?? {},
-        },
-        activity: {
-          actor_type: 'ADMIN',
-          actor_id: params.adminId,
-          action: 'UPDATE', // Standard action_type for general activity log
-          target_type: params.targetType ?? 'ADMIN_ACTION',
-          target_id: params.targetId,
-          metadata: {
-            admin_action: params.action,
-            ...params.metadata,
-          },
-        },
-      }, {
-        removeOnComplete: 2000,
-        removeOnFail: 5000,
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 2000 },
-      })
-    } catch (err) {
-      this.logger.error(`Failed to enqueue admin audit log: ${String(err)}`)
     }
   }
 }
