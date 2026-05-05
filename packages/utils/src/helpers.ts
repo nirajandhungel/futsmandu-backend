@@ -18,10 +18,13 @@ export function haversineKm(lat1: number, lng1: number, lat2: number, lng2: numb
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-/** 120000 paisa → "NPR 1,200" */
-export function formatPaisa(paisa: number): string {
-  return `NPR ${(paisa / 100).toLocaleString('en-NP')}`
+/** 1200 → "NPR 1,200" — amounts stored in NPR (not paisa) */
+export function formatNPR(amount: number): string {
+  return `NPR ${amount.toLocaleString('en-NP')}`
 }
+
+/** @deprecated Use formatNPR instead — kept for backward compatibility */
+export const formatPaisa = formatNPR
 
 /** Generate a cryptographically random hex token */
 export function randomToken(bytes = 16): string {
