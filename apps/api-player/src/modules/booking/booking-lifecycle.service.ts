@@ -107,6 +107,18 @@ export class BookingLifecycleService {
       throw new ForbiddenException(`Reliability score too low (${user.reliability_score}/100)`)
     }
 
+    // Read deposit percentage from platform_config once (outside tx to keep lock window small).
+    // If caller sends depositAmount explicitly, this value is only used as a fallback.
+    const depositConfig = await this.prisma.platform_config.findUnique({ where: { key: 'deposit_pct' } })
+    const parsedPct = depositConfig ? Number(depositConfig.value) : NaN
+    const depositPct = Number.isFinite(parsedPct) && parsedPct > 0 && parsedPct <= 100 ? parsedPct : 20
+
+    // Temporary mode: payment gateways are bypassed. When enabled, we treat the deposit as paid instantly
+    // and still create a payments row for accounting and payout workflows.
+    // Controlled via platform_config key: player_payment_bypass = "true" | "false" (defaults true).
+    const bypassConfig = await this.prisma.platform_config.findUnique({ where: { key: 'player_payment_bypass' } })
+    const paymentBypass = (bypassConfig?.value ?? 'true').toLowerCase() === 'true'
+
     // ── 4. Serializable transaction — lock → validate → create ──────────────
     const lockKey = `${dto.courtId}:${dto.date}:${dto.startTime}`
 
@@ -187,6 +199,18 @@ export class BookingLifecycleService {
         dto.courtId, dto.date, dto.startTime,
       )
 
+      // ── Deposit calculation ────────────────────────────────────────────────
+      // If client provided depositAmount, we lock it now and verify it later.
+      // Otherwise fall back to platform_config deposit_pct (default 20%).
+      const requestedDeposit = typeof dto.depositAmount === 'number' ? Math.trunc(dto.depositAmount) : null
+      const computedDeposit = Math.round((price * depositPct) / 100)
+      const depositAmount = requestedDeposit ?? computedDeposit
+
+      if (depositAmount < 100) throw new BadRequestException('Deposit amount must be at least 100')
+      if (depositAmount > price) throw new BadRequestException('Deposit amount cannot exceed total amount')
+
+      const remainingAmount = price - depositAmount
+
       // ── Build bookingMeta ONCE — this is the canonical record ──────────────
       // match_groups will be seeded from this; never re-derive join/split mode.
       const bookingMeta: BookingMeta = {
@@ -200,7 +224,7 @@ export class BookingLifecycleService {
       }
       const bookingMetaSaved = { ...bookingMeta, selectedFriendIds: config.selectedFriendIds }
 
-      // Create booking — status HELD
+      // Create booking — status HELD (or CONFIRMED if payment bypass is enabled)
       const booking = await tx.bookings.create({
         data: {
           booking_source:      'PLAYER_SELF',
@@ -213,27 +237,88 @@ export class BookingLifecycleService {
           end_time:            endTime,
           duration_mins:       court.slot_duration_mins,
           total_amount:        price,
+          deposit_amount:      depositAmount,
+          remaining_amount:    remainingAmount,
+          pay_status:          paymentBypass ? 'DEPOSIT_PAID' : 'PENDING',
           base_price:          price,
           applied_rule_id:     ruleId ?? null,
-          status:              'HELD',
-          hold_expires_at:     new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+          status:              paymentBypass ? 'CONFIRMED' : 'HELD',
+          payment_method:      paymentBypass ? 'CASH' : null, // bypass treated as manual/instant deposit
+          hold_expires_at:     paymentBypass ? null : new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
           created_by_user_id:  playerId,
           booking_meta:        bookingMetaSaved as Prisma.InputJsonValue,
         },
       })
 
-      // Set redis hold to block concurrent views from showing AVAILABLE
-      const dateStr = dto.date.split('T')[0]!
-      await this.redis.set(
-        this.redis.keys.slotHold(dto.courtId, dateStr, dto.startTime),
-        playerId,
-        600 // 10 minutes
-      )
+      // If bypass is on, create a payment record immediately as SUCCESS for the deposit amount.
+      // This keeps accounting consistent and unblocks payout pipelines.
+      if (paymentBypass) {
+        await tx.payments.create({
+          data: {
+            booking_id:     booking.id,
+            player_id:      playerId,
+            amount:         depositAmount,
+            payment_method: 'CASH',
+            gateway:        null,
+            gateway_tx_id:  null,
+            gateway_response: { bypassed: true, note: 'Gateway bypass mode' } as Prisma.InputJsonValue,
+            status:         'SUCCESS',
+            completed_at:   new Date(),
+          },
+        })
+
+        // Create match group (same behavior as confirmPayment)
+        const matchGroup = await tx.match_groups.create({
+          data: {
+            booking_id:      booking.id,
+            venue_id:        booking.venue_id,
+            court_id:        booking.court_id,
+            match_date:      booking.booking_date,
+            start_time:      booking.start_time,
+            end_time:        booking.end_time,
+            admin_id:        booking.player_id!,
+            max_players:     resolvedMaxPlayers,
+            min_players:     resolvedMaxPlayers,
+            is_open:         bookingMeta.joinMode === 'OPEN',
+            join_mode:       bookingMeta.joinMode ?? 'INVITE_ONLY',
+            auto_accept:     bookingMeta.bookingType === 'PARTIAL',
+            cost_split_mode: bookingMeta.costSplitMode ?? 'ADMIN_PAYS_ALL',
+            description:     bookingMeta.description ?? null,
+          },
+        })
+
+        await tx.match_group_members.create({
+          data: { match_group_id: matchGroup.id, user_id: booking.player_id!, role: 'admin', status: 'confirmed' },
+        })
+
+        const friendIds = (bookingMetaSaved as any).selectedFriendIds || []
+        if (friendIds.length > 0) {
+          await tx.match_group_members.createMany({
+            data: friendIds.map((friendId: string) => ({
+              match_group_id: matchGroup.id,
+              user_id:        friendId,
+              role:           'player',
+              status:         'confirmed',
+              invited_by:     booking.player_id!,
+            })),
+          })
+        }
+      } else {
+        // Set redis hold to block concurrent views from showing AVAILABLE
+        const dateStr = dto.date.split('T')[0]!
+        await this.redis.set(
+          this.redis.keys.slotHold(dto.courtId, dateStr, dto.startTime),
+          playerId,
+          600 // 10 minutes
+        )
+      }
 
       return {
         ...booking,
-        paymentStatus:  'PENDING',
+        paymentStatus:  paymentBypass ? 'SUCCESS' : 'PENDING',
         displayAmount:  formatPaisa(price),
+        displayDeposit: formatPaisa(depositAmount),
+        displayRemaining: formatPaisa(remainingAmount),
       }
     }, { isolationLevel: 'ReadCommitted', maxWait: 1500, timeout: 5000 })
     // ── Post-transaction side-effects (non-critical, best-effort) ───────────
@@ -268,6 +353,9 @@ export class BookingLifecycleService {
       where:  { id: bookingId },
       select: {
         total_amount:  true,
+        deposit_amount: true,
+        remaining_amount: true,
+        pay_status:    true,
         status:        true,
         player_id:     true,
         court_id:      true,
@@ -281,8 +369,9 @@ export class BookingLifecycleService {
     })
     if (!booking)                              throw new NotFoundException('Booking not found')
     if (booking.status !== 'PENDING_PAYMENT')  throw new ConflictException(`Booking is ${booking.status}`)
-    if (verified.amount !== booking.total_amount) {
-      throw new ConflictException('Payment amount does not match booking')
+    // Verify against deposit amount (player pays deposit online, remaining offline)
+    if (verified.amount !== booking.deposit_amount) {
+      throw new ConflictException('Payment amount does not match deposit')
     }
 
     const result = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -300,7 +389,7 @@ export class BookingLifecycleService {
       // Confirm booking
       const confirmed = await tx.bookings.update({
         where: { id: bookingId, status: 'PENDING_PAYMENT' },
-        data:  { status: 'CONFIRMED', hold_expires_at: null, updated_at: new Date() },
+        data:  { status: 'CONFIRMED', pay_status: 'DEPOSIT_PAID', hold_expires_at: null, updated_at: new Date() },
       })
 
       // ── Read match_group config exclusively from booking_meta ─────────────
@@ -371,7 +460,7 @@ export class BookingLifecycleService {
       targetId: bookingId,
       metadata: {
         bookingId,
-        amount: booking.total_amount,
+        amount: booking.deposit_amount,
         gateway: _gateway,
         txId: verified.txId,
         context: 'Payment Confirmation',
@@ -386,7 +475,7 @@ export class BookingLifecycleService {
   async initiatePayment(bookingId: string, gateway: 'KHALTI' | 'ESEWA', playerId: string) {
     const booking = await this.prisma.bookings.findUnique({
       where:  { id: bookingId },
-      select: { status: true, player_id: true, total_amount: true, hold_expires_at: true },
+      select: { status: true, player_id: true, total_amount: true, deposit_amount: true, hold_expires_at: true },
     })
     if (!booking)                          throw new NotFoundException('Booking not found')
     if (booking.player_id !== playerId)    throw new ForbiddenException('Not your booking')
@@ -399,12 +488,15 @@ export class BookingLifecycleService {
     const existingPayment = await this.prisma.payments.findUnique({ where: { booking_id: bookingId } })
     if (existingPayment) return existingPayment
 
+    // Payment is for the deposit amount, not the full total
+    const paymentAmount = booking.deposit_amount > 0 ? booking.deposit_amount : booking.total_amount
+
     return this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const payment = await tx.payments.create({
         data: {
           booking_id:     bookingId,
           player_id:      playerId,
-          amount:         booking.total_amount,
+          amount:         paymentAmount,
           gateway,
           payment_method: gateway,
           status:         'INITIATED',
@@ -638,7 +730,8 @@ export class BookingLifecycleService {
       ...(query.cursor ? { skip: 1, cursor: { id: query.cursor } } : { skip: (query.page ? query.page - 1 : 0) * take }),
       select: {
         id: true, status: true, booking_date: true, start_time: true, end_time: true,
-        total_amount: true, hold_expires_at: true, refund_status: true, refund_amount: true, created_at: true,
+        total_amount: true, deposit_amount: true, remaining_amount: true, pay_status: true,
+        hold_expires_at: true, refund_status: true, refund_amount: true, created_at: true,
         court: {
           select: {
             id: true, name: true, court_type: true,
@@ -691,7 +784,12 @@ export class BookingLifecycleService {
     })
     if (!booking)                          throw new NotFoundException('Booking not found')
     if (booking.player_id !== playerId)    throw new ForbiddenException('Access denied')
-    return { ...booking, displayAmount: formatPaisa(booking.total_amount) }
+    return {
+      ...booking,
+      displayAmount: formatPaisa(booking.total_amount),
+      displayDeposit: formatPaisa(booking.deposit_amount ?? 0),
+      displayRemaining: formatPaisa(booking.remaining_amount ?? 0),
+    }
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────

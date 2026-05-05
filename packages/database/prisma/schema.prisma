@@ -501,6 +501,12 @@ model bookings {
   end_time               String
   duration_mins          Int             @db.SmallInt
   total_amount           Int
+  // Player pays this amount online (e.g. eSewa/Khalti). Remaining is collected by venue owner offline.
+  // For legacy rows (before deposit feature), deposit_amount is backfilled to total_amount and remaining_amount = 0.
+  deposit_amount         Int             @default(0)
+  remaining_amount       Int             @default(0)
+  // PENDING -> DEPOSIT_PAID -> PAID_FULL (optional future state)
+  pay_status             String          @default("PENDING")
   base_price             Int
   applied_rule_id        String?         @db.Uuid
   status                 booking_status  @default(HELD)

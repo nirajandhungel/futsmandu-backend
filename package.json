@@ -12,6 +12,9 @@
   "pnpm": {
     "overrides": {
       "ajv": "^8.18.0",
+      "eslint>ajv": "^6.12.6",
+      "@eslint/eslintrc>ajv": "^6.12.6",
+      "ajv-formats>ajv": "^8.18.0",
       "@tootallnate/once": "^3.0.1",
       "effect": "^3.20.0",
       "path-to-regexp": "^8.4.0",

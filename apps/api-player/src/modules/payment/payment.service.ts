@@ -158,7 +158,15 @@ export class PaymentService {
   async initiateKhalti(bookingId: string, playerId: string) {
     const booking = await this.prisma.bookings.findUnique({
       where: { id: bookingId },
-      select: { id: true, player_id: true, total_amount: true, status: true, payment: { select: { id: true, status: true } } },
+      select: {
+        id: true,
+        player_id: true,
+        total_amount: true,
+        deposit_amount: true,
+        remaining_amount: true,
+        status: true,
+        payment: { select: { id: true, status: true } },
+      },
     })
     if (!booking) throw new NotFoundException('Booking not found')
     if (booking.player_id !== playerId) throw new ConflictException('Not your booking')
@@ -167,7 +175,8 @@ export class PaymentService {
       message: 'Player payment is temporarily disabled. Booking is confirmed directly during booking.',
       bookingId: booking.id,
       bookingStatus: booking.status,
-      amount: booking.total_amount,
+      amount: booking.deposit_amount ?? booking.total_amount,
+      remainingAmount: booking.remaining_amount ?? 0,
       paymentId: booking.payment?.id ?? null,
       paymentStatus: booking.payment?.status ?? null,
     }
@@ -196,7 +205,15 @@ export class PaymentService {
   async initiateEsewa(bookingId: string, playerId: string) {
     const booking = await this.prisma.bookings.findUnique({
       where: { id: bookingId },
-      select: { id: true, player_id: true, total_amount: true, status: true, payment: { select: { id: true, status: true } } },
+      select: {
+        id: true,
+        player_id: true,
+        total_amount: true,
+        deposit_amount: true,
+        remaining_amount: true,
+        status: true,
+        payment: { select: { id: true, status: true } },
+      },
     })
     if (!booking) throw new NotFoundException('Booking not found')
     if (booking.player_id !== playerId) throw new ConflictException('Not your booking')
@@ -205,7 +222,8 @@ export class PaymentService {
       message: 'Player payment is temporarily disabled. Booking is confirmed directly during booking.',
       bookingId: booking.id,
       bookingStatus: booking.status,
-      amount: booking.total_amount,
+      amount: booking.deposit_amount ?? booking.total_amount,
+      remainingAmount: booking.remaining_amount ?? 0,
       paymentId: booking.payment?.id ?? null,
       paymentStatus: booking.payment?.status ?? null,
     }

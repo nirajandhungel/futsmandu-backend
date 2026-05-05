@@ -116,6 +116,16 @@ export class HoldSlotDto {
   @IsString()
   @MaxLength(80)
   bookingName?: string
+
+  @ApiPropertyOptional({
+    minimum: 100,
+    description: 'Deposit amount (paisa) to pay online now. Must be between 100 and total booking amount.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  depositAmount?: number
 }
 
 export class CancelBookingDto {

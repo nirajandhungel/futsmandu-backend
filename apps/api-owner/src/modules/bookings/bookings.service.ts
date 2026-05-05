@@ -223,7 +223,11 @@ async createOfflineBooking(ownerId: string, staffId: string, dto: CreateOfflineB
           booking_name: true,
           status: true,
           booking_date: true, start_time: true, end_time: true,
-          total_amount: true, offline_customer_name: true,
+          total_amount: true,
+          deposit_amount: true,
+          remaining_amount: true,
+          pay_status: true,
+          offline_customer_name: true,
           offline_customer_phone: true, created_at: true,
           player: { select: { id: true, name: true, phone: true } },
           court:  { select: { id: true, name: true } },
@@ -237,7 +241,12 @@ async createOfflineBooking(ownerId: string, staffId: string, dto: CreateOfflineB
     ])
 
     return {
-      data: bookings,
+      data: bookings.map((b: any) => ({
+        ...b,
+        displayAmount: formatPaisa(b.total_amount),
+        displayDeposit: formatPaisa(b.deposit_amount ?? 0),
+        displayRemaining: formatPaisa(b.remaining_amount ?? 0),
+      })),
       meta: {
         page,
         limit:      PAGE_SIZE,
