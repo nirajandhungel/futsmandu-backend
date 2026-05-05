@@ -25,23 +25,69 @@ export class AdminPaymentService {
   }
 
   async listPayouts(query: ListPayoutsQueryDto) {
-    const { status, ownerId, venueId, bookingId, paymentId, cursor, limit = 20 } = query
-    return this.prisma.owner_payouts.findMany({
-      where: {
-        ...(status ? { status } : {}),
-        ...(ownerId ? { owner_id: ownerId } : {}),
-        ...(venueId ? { venue_id: venueId } : {}),
-        ...(bookingId ? { booking_id: bookingId } : {}),
-        ...(paymentId ? { payment_id: paymentId } : {}),
-      },
-      include: {
-        owner: { select: { id: true, name: true, email: true, esewa_id: true, esewa_verified: true } },
-        venue: { select: { id: true, name: true } },
-      },
-      orderBy: { created_at: 'desc' },
-      take: Math.min(limit, 100),
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    })
+    const { status, ownerId, venueId, bookingId, paymentId, page = 1, limit = 20 } = query
+    const skip = (page - 1) * limit
+    const take = Math.min(limit, 100)
+
+    const where = {
+      ...(status ? { status } : {}),
+      ...(ownerId ? { owner_id: ownerId } : {}),
+      ...(venueId ? { venue_id: venueId } : {}),
+      ...(bookingId ? { booking_id: bookingId } : {}),
+      ...(paymentId ? { payment_id: paymentId } : {}),
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.owner_payouts.findMany({
+        where,
+        include: {
+          owner: { select: { id: true, name: true, email: true, esewa_id: true, esewa_verified: true } },
+          venue: { select: { id: true, name: true } },
+        },
+        orderBy: { created_at: 'desc' },
+        take,
+        skip,
+      }),
+      this.prisma.owner_payouts.count({ where }),
+    ])
+
+    return {
+      items,
+      totalItems: total,
+      page,
+      totalPages: Math.ceil(total / take),
+    }
+  }
+
+  async listPayments(query: any) {
+    const { status, page = 1, limit = 20 } = query
+    const skip = (page - 1) * limit
+    const take = Math.min(limit, 100)
+
+    const where = {
+      ...(status ? { status } : {}),
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.payments.findMany({
+        where,
+        include: {
+          player: { select: { id: true, name: true, phone: true } },
+          booking: { select: { id: true, booking_name: true } },
+        },
+        orderBy: { initiated_at: 'desc' },
+        take,
+        skip,
+      }),
+      this.prisma.payments.count({ where }),
+    ])
+
+    return {
+      items,
+      totalItems: total,
+      page,
+      totalPages: Math.ceil(total / take),
+    }
   }
 
   async getPayoutDetail(id: string) {
@@ -63,15 +109,26 @@ export class AdminPaymentService {
   }
 
   private async auditLog(adminId: string, action: string, targetId?: string, targetType?: string, metadata?: any) {
-    await this.prisma.admin_audit_log.create({
+    // Map custom strings to valid action_type enums
+    let actionEnum: any = 'UPDATE'
+    if (action.includes('PAYMENT')) actionEnum = 'PAYMENT'
+    if (action.includes('REFUND')) actionEnum = 'REFUND'
+    if (action.includes('CREATE')) actionEnum = 'CREATE'
+    if (action.includes('DELETE')) actionEnum = 'DELETE'
+
+    await this.prisma.user_activity_log.create({
       data: {
-        admin_id: adminId,
-        action,
+        actor_id: adminId,
+        actor_type: 'ADMIN',
+        action: actionEnum,
         target_id: targetId,
         target_type: targetType,
-        metadata: metadata || {},
+        metadata: {
+          ...metadata,
+          original_action: action // Preserve original descriptive action
+        },
       },
-    }).catch((err: any) => this.logger.error(`Failed to write audit log: ${err.message}`))
+    }).catch((err: any) => this.logger.error(`Failed to write activity log: ${err.message}`))
   }
 
   private toPlatformConfigType(type: PlatformConfigType): platform_config_type {
@@ -145,7 +202,7 @@ export class AdminPaymentService {
           ownerId: booking.venue.owner.id,
           venueId: booking.venue_id,
           ownerEsewaId: booking.venue.owner.esewa_id,
-          totalPaisa: booking.payment.amount,
+          totalAmount: booking.payment.amount,
           adminFee: split.adminFee,
           ownerAmount: split.ownerAmount,
           adminFeePct,
@@ -179,6 +236,215 @@ export class AdminPaymentService {
 
     await this.auditLog(adminId, 'MANUAL_RESOLVE_PAYOUT', id, 'owner_payouts', { note })
     return { message: 'Payout manually resolved', payoutId: id }
+  }
+
+  /**
+   * Record a manual payout to a venue owner.
+   * Admin pays the owner manually (e.g., bank transfer, cash) and records it here.
+   * Supports partial payouts — admin can pay part of the total and record the rest later.
+   */
+  async recordManualPayout(data: {
+    venueId: string
+    amountPaid: number
+    note: string
+    adminId: string
+  }) {
+    const { venueId, amountPaid, note, adminId } = data
+    if (amountPaid <= 0) throw new BadRequestException('Amount must be positive')
+
+    const venue = await this.prisma.venues.findUnique({
+      where: { id: venueId },
+      select: { id: true, name: true, owner_id: true, owner: { select: { name: true } } },
+    })
+    if (!venue) throw new NotFoundException('Venue not found')
+
+    // Find all pending payouts for this venue and mark them as resolved in order
+    const pendingPayouts = await this.prisma.owner_payouts.findMany({
+      where: { venue_id: venueId, status: { in: ['PENDING', 'FAILED'] } },
+      orderBy: { created_at: 'asc' },
+    })
+
+    let remainingToPay = amountPaid
+    const resolvedIds: string[] = []
+
+    for (const payout of pendingPayouts) {
+      if (remainingToPay <= 0) break
+      if (remainingToPay >= payout.owner_amount) {
+        // Fully cover this payout
+        await this.prisma.owner_payouts.update({
+          where: { id: payout.id },
+          data: {
+            status: 'MANUALLY_RESOLVED',
+            resolved_by: adminId,
+            resolved_at: new Date(),
+            resolution_note: `Manual payout: ${note}`,
+            completed_at: new Date(),
+          },
+        })
+        remainingToPay -= payout.owner_amount
+        resolvedIds.push(payout.id)
+      } else {
+        // Partial — mark with note but keep PENDING
+        await this.prisma.owner_payouts.update({
+          where: { id: payout.id },
+          data: {
+            resolution_note: `Partial payment of NPR ${amountPaid}: ${note}. Remaining: NPR ${payout.owner_amount - remainingToPay}`,
+            last_attempted_at: new Date(),
+          },
+        })
+        remainingToPay = 0
+      }
+    }
+
+    await this.auditLog(adminId, 'MANUAL_PAYOUT', venueId, 'venues', {
+      amountPaid,
+      venueName: venue.name,
+      resolvedPayouts: resolvedIds.length,
+      note,
+    })
+
+    return {
+      message: `NPR ${amountPaid} recorded for ${venue.name}`,
+      resolvedPayouts: resolvedIds.length,
+      remainingFromPayment: remainingToPay,
+    }
+  }
+
+  /**
+   * Update a booking's pay_status — used when admin confirms remaining amount collected from player.
+   */
+  async updateBookingPayStatus(bookingId: string, newStatus: string, adminId: string, note?: string) {
+    const booking = await this.prisma.bookings.findUnique({
+      where: { id: bookingId },
+      select: { id: true, pay_status: true, total_amount: true, deposit_amount: true, remaining_amount: true },
+    })
+    if (!booking) throw new NotFoundException('Booking not found')
+
+    const validStatuses = ['PENDING', 'DEPOSIT_PAID', 'PAID', 'FAILED', 'REFUNDED']
+    if (!validStatuses.includes(newStatus)) {
+      throw new BadRequestException(`Invalid pay_status. Must be one of: ${validStatuses.join(', ')}`)
+    }
+
+    await this.prisma.bookings.update({
+      where: { id: bookingId },
+      data: {
+        pay_status: newStatus as any,
+        remaining_amount: newStatus === 'PAID' ? 0 : booking.remaining_amount,
+      },
+    })
+
+    await this.auditLog(adminId, 'UPDATE_PAY_STATUS', bookingId, 'bookings', {
+      oldStatus: booking.pay_status,
+      newStatus,
+      note,
+    })
+
+    return { message: `Booking pay status updated to ${newStatus}`, bookingId }
+  }
+
+
+  /**
+   * Venue-level payout aggregation:
+   * Shows all bookings under each venue with total pending payouts.
+   */
+  async getVenuePayoutSummary() {
+    const venues = await this.prisma.venues.findMany({
+      where: { is_active: true },
+      select: {
+        id: true,
+        name: true,
+        owner: { select: { id: true, name: true, esewa_id: true } },
+      },
+    })
+
+    const payoutsByVenue = await this.prisma.owner_payouts.groupBy({
+      by: ['venue_id', 'status'],
+      _sum: { owner_amount: true },
+      _count: { id: true },
+    })
+
+    const venueMap = new Map<string, { pending: number; paid: number; pendingCount: number; paidCount: number }>()
+    for (const p of payoutsByVenue) {
+      const entry = venueMap.get(p.venue_id) ?? { pending: 0, paid: 0, pendingCount: 0, paidCount: 0 }
+      if (p.status === 'SUCCESS' || p.status === 'MANUALLY_RESOLVED') {
+        entry.paid += p._sum.owner_amount ?? 0
+        entry.paidCount += p._count.id
+      } else {
+        entry.pending += p._sum.owner_amount ?? 0
+        entry.pendingCount += p._count.id
+      }
+      venueMap.set(p.venue_id, entry)
+    }
+
+    return venues.map((v: { id: string; name: string; owner: { id: string; name: string; esewa_id: string | null } }) => {
+      const stats = venueMap.get(v.id) ?? { pending: 0, paid: 0, pendingCount: 0, paidCount: 0 }
+      return {
+        venueId: v.id,
+        venueName: v.name,
+        ownerName: v.owner.name,
+        ownerEsewaId: v.owner.esewa_id,
+        pendingPayoutNPR: stats.pending,
+        paidPayoutNPR: stats.paid,
+        pendingCount: stats.pendingCount,
+        paidCount: stats.paidCount,
+        totalPayoutNPR: stats.pending + stats.paid,
+      }
+    })
+  }
+
+  /**
+   * Per-booking payment summary with deposit/remaining/payout info.
+   */
+  async getBookingPaymentSummary(bookingId: string) {
+    const booking = await this.prisma.bookings.findUnique({
+      where: { id: bookingId },
+      select: {
+        id: true,
+        total_amount: true,
+        deposit_amount: true,
+        remaining_amount: true,
+        status: true,
+        pay_status: true,
+        venue: { select: { id: true, name: true, owner: { select: { id: true, name: true } } } },
+        payment: {
+          select: {
+            id: true, amount: true, status: true, payment_method: true, gateway: true,
+            payout: {
+              select: {
+                id: true, owner_amount: true, admin_fee: true, status: true,
+                completed_at: true, resolution_note: true,
+              },
+            },
+          },
+        },
+      },
+    })
+    if (!booking) throw new NotFoundException('Booking not found')
+
+    return {
+      bookingId: booking.id,
+      totalAmount: booking.total_amount,
+      depositAmount: booking.deposit_amount,
+      remainingAmount: booking.remaining_amount,
+      bookingStatus: booking.status,
+      payStatus: booking.pay_status,
+      venue: booking.venue,
+      payment: booking.payment ? {
+        paymentId: booking.payment.id,
+        amount: booking.payment.amount,
+        status: booking.payment.status,
+        method: booking.payment.payment_method,
+        gateway: booking.payment.gateway,
+        payout: booking.payment.payout ? {
+          payoutId: booking.payment.payout.id,
+          ownerAmount: booking.payment.payout.owner_amount,
+          adminFee: booking.payment.payout.admin_fee,
+          payoutStatus: booking.payment.payout.status,
+          completedAt: booking.payment.payout.completed_at,
+          note: booking.payment.payout.resolution_note,
+        } : null,
+      } : null,
+    }
   }
 
 
