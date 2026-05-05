@@ -7,12 +7,14 @@ import type { booking_status, booking_source } from '@futsmandu/database'
 interface ListBookingsQuery {
   page?: number
   limit?: number
-  status?: booking_status
+  status?: any // Use any for mapping flexibility
+  payment_status?: string
   bookingSource?: booking_source
   venueId?: string
   playerId?: string
   dateFrom?: string
   dateTo?: string
+  date?: string
   search?: string
 }
 
@@ -35,16 +37,50 @@ export class AdminBookingService {
 
     const where: Record<string, unknown> = {}
 
-    if (query.status)        where['status']         = query.status
+    // 1. Booking Status Mapping
+    if (query.status) {
+      const status = String(query.status).toUpperCase().replace('-', '_')
+      if (status === 'PENDING') {
+        where['status'] = { in: ['PENDING_PAYMENT', 'HELD'] }
+      } else {
+        where['status'] = status
+      }
+    }
+
+    // 2. Booking Source
     if (query.bookingSource) where['booking_source'] = query.bookingSource
     if (query.venueId)       where['venue_id']       = query.venueId
     if (query.playerId)      where['player_id']      = query.playerId
 
-    if (query.dateFrom || query.dateTo) {
+    // 3. Date Handling
+    if (query.date) {
+        // Single day filter
+        const startOfDay = new Date(query.date)
+        startOfDay.setHours(0, 0, 0, 0)
+        const endOfDay = new Date(query.date)
+        endOfDay.setHours(23, 59, 59, 999)
+        
+        where['booking_date'] = {
+            gte: startOfDay,
+            lte: endOfDay
+        }
+    } else if (query.dateFrom || query.dateTo) {
       where['booking_date'] = {
         ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
         ...(query.dateTo   ? { lte: new Date(query.dateTo)   } : {}),
       }
+    }
+
+    // 4. Payment Status Mapping
+    if (query.payment_status) {
+        const ps = String(query.payment_status).toUpperCase()
+        let dbStatus = ps
+        if (ps === 'PAID') dbStatus = 'SUCCESS'
+        if (ps === 'UNPAID') dbStatus = 'INITIATED'
+        
+        where['payment'] = {
+            status: dbStatus
+        }
     }
 
     if (query.search?.trim()) {
@@ -71,6 +107,9 @@ export class AdminBookingService {
           end_time:       true,
           duration_mins:  true,
           total_amount:   true,
+          deposit_amount: true,
+          remaining_amount: true,
+          pay_status:     true,
           refund_status:  true,
           refund_amount:  true,
           created_at:     true,
@@ -131,7 +170,7 @@ export class AdminBookingService {
       }),
       this.prisma.bookings.aggregate({
         where: { ...where, status: 'CONFIRMED' },
-        _sum:  { total_amount: true },
+        _sum:  { total_amount: true, deposit_amount: true, remaining_amount: true },
       }),
     ])
 
@@ -142,6 +181,8 @@ export class AdminBookingService {
       pendingPayment,
       upcoming,
       grossRevenue: gross._sum.total_amount ?? 0,
+      totalDeposits: gross._sum.deposit_amount ?? 0,
+      totalRemaining: gross._sum.remaining_amount ?? 0,
     }
   }
 }
