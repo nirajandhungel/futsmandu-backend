@@ -39,7 +39,7 @@ export class OwnerPayoutProcessor extends WorkerHost implements OnModuleInit {
     const result = await this.esewaPayouts.transferToOwner({
       payoutId: payout.id,
       ownerEsewaId: payout.owner_esewa_id,
-      amountNpr: Math.floor(payout.owner_amount / 100),
+      amountNpr: payout.owner_amount,
       remarks: `Futsmandu payout ${payout.booking_id.slice(0, 8)}`,
     })
 
