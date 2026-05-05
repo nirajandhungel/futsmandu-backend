@@ -5,13 +5,7 @@ import { PrismaService } from '@futsmandu/database'
 import { QUEUE_AUDIT_LOGS } from '@futsmandu/queues'
 
 export type AuditWriteJob = {
-  adminAudit?: {
-    adminId: string
-    action: string
-    targetId?: string
-    targetType?: string
-    metadata?: Record<string, any>
-  }
+  // activity is now the primary and only log format
   activity: {
     actor_type: 'ADMIN' | 'OWNER' | 'USER' | 'SYSTEM'
     actor_id: string
@@ -32,21 +26,9 @@ export class AuditLogProcessor extends WorkerHost {
   }
 
   async process(job: Job<AuditWriteJob>): Promise<void> {
-    const { adminAudit, activity } = job.data
+    const { activity } = job.data
 
     try {
-      if (adminAudit) {
-        await this.prisma.admin_audit_log.create({
-          data: {
-            admin_id: adminAudit.adminId,
-            action: adminAudit.action,
-            target_id: adminAudit.targetId,
-            target_type: adminAudit.targetType,
-            metadata: (adminAudit.metadata ?? {}) as any,
-          },
-        })
-      }
-
       if (activity) {
         await this.prisma.user_activity_log.create({
           data: {
@@ -60,7 +42,7 @@ export class AuditLogProcessor extends WorkerHost {
         })
       }
     } catch (err) {
-      this.logger.error(`Failed to persist audit activity for job ${job.id}`, String(err))
+      this.logger.error(`Failed to persist activity log for job ${job.id}`, String(err))
       throw err // Re-throw to trigger retry if needed
     }
   }
