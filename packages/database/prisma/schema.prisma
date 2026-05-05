@@ -47,6 +47,15 @@ enum payment_status {
   REFUNDED
 }
 
+// Tracks whether a booking's total amount has been fully collected
+enum booking_payment_status {
+  PENDING        // No payment received yet
+  DEPOSIT_PAID   // Deposit paid, remaining owed
+  PAID           // Fully paid (deposit + remaining)
+  FAILED         // Payment attempt failed
+  REFUNDED       // Payment was refunded
+}
+
 enum payout_status {
   PENDING
   PROCESSING
@@ -500,10 +509,13 @@ model bookings {
   start_time             String
   end_time               String
   duration_mins          Int             @db.SmallInt
-  total_amount           Int
+  total_amount           Int             // Total cost in NPR (e.g., 1200)
+  deposit_amount         Int             @default(0)       // Upfront deposit in NPR (e.g., 200)
+  remaining_amount       Int             @default(0)       // Remaining owed in NPR (e.g., 1000)
   base_price             Int
   applied_rule_id        String?         @db.Uuid
-  status                 booking_status  @default(HELD)
+  status                 booking_status            @default(HELD)
+  pay_status             booking_payment_status    @default(PENDING) // Tracks deposit/full payment
   hold_expires_at        DateTime?       @db.Timestamptz(6)
   cancelled_at           DateTime?       @db.Timestamptz(6)
   // FIX 1: cancelled_by is optional (SetNull requires nullable FK)
@@ -557,6 +569,7 @@ model bookings {
   @@index([payment_method])
   @@index([booking_source])
   @@index([venue_id, booking_date, start_time])
+  @@index([pay_status])
 }
 
 model payments {
@@ -968,19 +981,6 @@ model user_activity_log {
   @@index([created_at])
 }
 
-model admin_audit_log {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  admin_id    String   @db.Uuid
-  action      String
-  target_id   String?  @db.Uuid
-  target_type String?
-  metadata    Json?
-  created_at  DateTime @default(now()) @db.Timestamptz(6)
-
-  @@index([admin_id, created_at(sort: Desc)])
-  @@index([target_id, target_type])
-  @@index([created_at])
-}
 
 model security_incidents {
   id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -1062,4 +1062,100 @@ model email_verification_otps {
   // Secondary indexes for email lookups and rate-limit count query
   @@index([email, verified_at])
   @@index([expires_at, verified_at])
+}
+
+
+// ==================== CHAT SYSTEM ====================
+// ONE unified system for both DIRECT (1-to-1) and GROUP chats.
+// Uses polymorphic identity (user_id + user_role) — no FK to users/owners.
+// Chat Service resolves identities via its own service layer.
+
+enum chat_type {
+  DIRECT
+  GROUP
+}
+
+enum chat_participant_role {
+  ADMIN
+  MEMBER
+}
+
+enum chat_user_role {
+  PLAYER
+  OWNER
+}
+
+enum chat_message_type {
+  TEXT
+  IMAGE
+  SYSTEM
+}
+
+model chats {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type        chat_type
+  name        String?                // required for GROUP, null for DIRECT
+  booking_id  String?   @db.Uuid     // optional link to a booking
+  created_by_id   String   @db.Uuid  // userId of creator
+  created_by_role chat_user_role     // PLAYER or OWNER
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime  @updatedAt @db.Timestamptz(6)
+  deleted_at  DateTime? @db.Timestamptz(6)
+
+  participants chat_participants[]
+  messages     messages[]
+
+  @@index([type, created_at(sort: Desc)])
+  @@index([booking_id])
+  @@index([created_by_id, created_by_role])
+  @@index([deleted_at])
+}
+
+model chat_participants {
+  id           String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  chat_id      String                @db.Uuid
+  user_id      String                @db.Uuid
+  user_role    chat_user_role        // PLAYER or OWNER
+  role_in_chat chat_participant_role @default(MEMBER)
+  joined_at    DateTime              @default(now()) @db.Timestamptz(6)
+  left_at      DateTime?             @db.Timestamptz(6)
+  deleted_at   DateTime?             @db.Timestamptz(6)
+
+  chat         chats                 @relation(fields: [chat_id], references: [id], onDelete: Restrict)
+
+  @@unique([chat_id, user_id, user_role])
+  @@index([user_id, user_role, left_at])
+  @@index([chat_id, left_at])
+  @@index([deleted_at])
+}
+
+model messages {
+  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  chat_id     String            @db.Uuid
+  sender_id   String            @db.Uuid
+  sender_role chat_user_role
+  content     String
+  type        chat_message_type @default(TEXT)
+  created_at  DateTime          @default(now()) @db.Timestamptz(6)
+  deleted_at  DateTime?         @db.Timestamptz(6)
+
+  chat        chats             @relation(fields: [chat_id], references: [id], onDelete: Restrict)
+  reads       message_reads[]
+
+  @@index([chat_id, created_at(sort: Desc)])
+  @@index([sender_id, sender_role])
+  @@index([deleted_at])
+}
+
+model message_reads {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  message_id String   @db.Uuid
+  user_id    String   @db.Uuid
+  user_role  chat_user_role
+  read_at    DateTime @default(now()) @db.Timestamptz(6)
+
+  message    messages @relation(fields: [message_id], references: [id], onDelete: Restrict)
+
+  @@unique([message_id, user_id, user_role])
+  @@index([user_id, user_role, read_at])
 }
