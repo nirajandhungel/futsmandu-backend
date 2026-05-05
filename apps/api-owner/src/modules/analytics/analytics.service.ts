@@ -53,8 +53,8 @@ export class AnalyticsService {
     ])
 
     const summary = {
-      totalRevenuePaisa: revenue._sum.total_amount ?? 0,
-      totalRevenueNPR:   ((revenue._sum.total_amount ?? 0) / 100).toFixed(2),
+      totalRevenueRaw: revenue._sum.total_amount ?? 0,
+      totalRevenueNPR:   (revenue._sum.total_amount ?? 0).toLocaleString('en-NP', { minimumFractionDigits: 2 }),
       confirmedBookings: revenue._count.id,
       avgBookingValue:   Math.round(revenue._avg.total_amount ?? 0),
       byStatus: Object.fromEntries(
@@ -131,11 +131,11 @@ export class AnalyticsService {
         let periodStr = row.period.toISOString().split('T')[0]!
         if (groupBy === 'month') periodStr = periodStr.substring(0, 7)
         if (groupBy === 'week')  periodStr = periodStr // keep standard date format for week start
-        const totalPaisa = Number(row.total || 0)
+        const totalAmount = Number(row.total || 0)
         return {
           period: periodStr,
-          totalPaisa,
-          totalNPR: (totalPaisa / 100).toFixed(2),
+          totalAmount,
+          totalNPR: totalAmount.toLocaleString('en-NP', { minimumFractionDigits: 2 }),
         }
       }),
     }
