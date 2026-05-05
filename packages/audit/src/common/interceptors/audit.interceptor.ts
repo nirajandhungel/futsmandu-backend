@@ -100,25 +100,14 @@ export class AuditInterceptor implements NestInterceptor {
       durationMs: Date.now() - startedAt,
     }
 
-    // If it's an admin actor, we use the dedicated admin logging path
-    if (this.options.actorType === 'ADMIN') {
-      await this.auditService.logAdminAction({
-        adminId: actorId,
-        action: `${method} ${url}`,
-        targetType: targetType ?? undefined,
-        targetId: targetId ?? undefined,
-        metadata,
-      })
-    } else {
-      await this.auditService.log({
-        actorType: this.options.actorType,
-        actorId,
-        action,
-        targetType: targetType ?? undefined,
-        targetId: targetId ?? undefined,
-        metadata,
-      })
-    }
+    await this.auditService.log({
+      actorType: this.options.actorType,
+      actorId,
+      action,
+      targetType: targetType ?? undefined,
+      targetId: targetId ?? undefined,
+      metadata,
+    })
   }
 
   private resolveActionType(method: string): string {
