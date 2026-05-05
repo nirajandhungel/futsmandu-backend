@@ -22,10 +22,10 @@ export class ListBookingsQueryDto {
   @Max(100)
   limit?: number
 
-  @ApiPropertyOptional({ enum: booking_status })
+  @ApiPropertyOptional({ description: 'Filter by booking status' })
   @IsOptional()
-  @IsEnum(booking_status)
-  status?: booking_status
+  @IsString()
+  status?: string
 
   // booking_type does not exist in schema — replaced by booking_source
   @ApiPropertyOptional({
@@ -55,6 +55,16 @@ export class ListBookingsQueryDto {
   @IsOptional()
   @IsDateString()
   dateTo?: string
+
+  @ApiPropertyOptional({ description: 'Filter by specific date (YYYY-MM-DD)' })
+  @IsOptional()
+  @IsString()
+  date?: string
+
+  @ApiPropertyOptional({ description: 'Filter by payment status: INITIATED | SUCCESS | FAILED | REFUNDED' })
+  @IsOptional()
+  @IsString()
+  payment_status?: string
 
   @ApiPropertyOptional({ description: 'Search by booking id, player name/email/phone, venue name' })
   @IsOptional()
