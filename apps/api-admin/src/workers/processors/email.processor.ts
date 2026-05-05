@@ -65,7 +65,7 @@ export class AdminEmailProcessor extends WorkerHost {
         html: (d) => `
           <h2>Admin Action Required</h2>
           <p>A refund for booking <code>${String(d['bookingId'] ?? '')}</code> requires manual processing via the eSewa merchant portal.</p>
-          <p><strong>Amount:</strong> NPR ${Number(d['amountPaisa'] ?? 0) / 100}</p>
+          <p><strong>Amount:</strong> NPR ${Number(d['amountNPR'] ?? d['amountPaisa'] ?? 0)}</p>
           <p>Please process this refund and update the booking status in the admin dashboard.</p>
         `,
       },
