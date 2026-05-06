@@ -75,6 +75,19 @@ export class PayoutService {
     }
   }
 
+  /**
+   * Calculates the actual amount the platform owes the venue owner.
+   * Payout = (Deposit collected by platform) - (Admin fee based on total booking price).
+   * If negative, it means the owner owes the platform (rare if deposit covers fee).
+   */
+  calculatePlatformPayout(totalAmount: number, depositAmount: number, adminFeePct: number): { adminFee: number; ownerPayout: number } {
+    const adminFee = Math.floor((totalAmount * adminFeePct) / 100)
+    return {
+      adminFee,
+      ownerPayout: depositAmount - adminFee,
+    }
+  }
+
   buildPayoutCreateOp(params: {
     paymentId: string
     bookingId: string
