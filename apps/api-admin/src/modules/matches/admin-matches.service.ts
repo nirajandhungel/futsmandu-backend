@@ -74,6 +74,9 @@ export class AdminMatchesService {
     });
 
     if (!match) throw new NotFoundException('Match not found');
+    
+    const teamA = match.members.filter((m: any) => m.team_side === 'A').map((m: any) => m.user_id);
+    const teamB = match.members.filter((m: any) => m.team_side === 'B').map((m: any) => m.user_id);
 
     return {
       id: match.id,
@@ -86,8 +89,8 @@ export class AdminMatchesService {
       time: match.start_time || match.booking?.start_time,
       winner: match.result_winner,
       invite_token: match.invite_token,
-      team_a: match.team_a || [],
-      team_b: match.team_b || [],
+      team_a: teamA,
+      team_b: teamB,
       players: match.members.map((m: any) => ({
         id: m.user.id,
         name: m.user.name,
