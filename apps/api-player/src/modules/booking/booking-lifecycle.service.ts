@@ -116,10 +116,13 @@ export class BookingLifecycleService {
         SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})) AS acquired`
       if (!lock?.acquired) throw new ConflictException('Slot just taken — choose another time')
 
-      // Fetch court
+      // Fetch court with owner info for payout record
       const court = await tx.courts.findUnique({
         where:  { id: dto.courtId, is_active: true },
-        select: { venue_id: true, slot_duration_mins: true, open_time: true, close_time: true, capacity: true },
+        select: {
+          venue_id: true, slot_duration_mins: true, open_time: true, close_time: true, capacity: true,
+          venue: { select: { owner_id: true, owner: { select: { id: true, esewa_id: true } } } },
+        },
       })
       if (!court) throw new NotFoundException('Court not found or inactive')
 
@@ -242,7 +245,7 @@ export class BookingLifecycleService {
 
       // Persist a payment ledger row even in bypass mode so admin/owner can
       // track deposited amount and remaining collection consistently.
-      await tx.payments.create({
+      const payment = await tx.payments.create({
         data: {
           booking_id: booking.id,
           player_id: playerId,
@@ -258,6 +261,27 @@ export class BookingLifecycleService {
           completed_at: new Date(),
         },
       })
+
+      // Auto-create owner_payouts record when booking + payment created (money goes to platform)
+      // Admin later manually transfers to owner and records it via recordManualPayout()
+      if (court.venue?.owner?.id) {
+        const adminFeePct = await this.payoutService.getAdminFeePct()
+        const split = (this.payoutService as any).calculatePlatformPayout(price, depositAmount, adminFeePct)
+
+        const payoutOp = this.payoutService.buildPayoutCreateOp({
+          paymentId: payment.id,
+          bookingId: booking.id,
+          ownerId: court.venue.owner.id,
+          venueId: court.venue_id,
+          ownerEsewaId: court.venue.owner.esewa_id ?? 'MANUAL',
+          totalAmount: depositAmount, // This is what the platform actually has
+          adminFee: split.adminFee,
+          ownerAmount: split.ownerPayout,
+          adminFeePct,
+        })
+
+        await tx.owner_payouts.create(payoutOp)
+      }
 
       const maxPlayers = bookingMeta.maxPlayers || court.capacity || 10
       const matchGroup = await tx.match_groups.create({
@@ -420,6 +444,26 @@ export class BookingLifecycleService {
             invited_by:     confirmed.player_id!,
           })),
         })
+      }
+
+      // Auto-create owner_payouts record when booking + payment confirmed
+      if (booking.venue?.owner?.id && booking.payment?.id) {
+        const adminFeePct = await this.payoutService.getAdminFeePct()
+        const split = (this.payoutService as any).calculatePlatformPayout(booking.total_amount, booking.deposit_amount, adminFeePct)
+
+        await tx.owner_payouts.create(
+          this.payoutService.buildPayoutCreateOp({
+            paymentId: booking.payment.id,
+            bookingId: bookingId,
+            ownerId: booking.venue.owner.id,
+            venueId: booking.venue_id,
+            ownerEsewaId: booking.venue.owner.esewa_id ?? 'MANUAL',
+            totalAmount: booking.deposit_amount,
+            adminFee: split.adminFee,
+            ownerAmount: split.ownerPayout,
+            adminFeePct,
+          }),
+        )
       }
 
       return { confirmed, matchGroup }

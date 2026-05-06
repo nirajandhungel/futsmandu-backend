@@ -248,7 +248,8 @@ export class AdminBookingService {
 
   /**
    * Mark a CONFIRMED booking as COMPLETED.
-   * Required before admin can trigger owner payout.
+   * Payout record is auto-created at booking confirmation (when payment received).
+   * This marks the booking event as finished for admin tracking.
    */
   async markBookingCompleted(bookingId: string, adminId: string) {
     const booking = await this.prisma.bookings.findUnique({

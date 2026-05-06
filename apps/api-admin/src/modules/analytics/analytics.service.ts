@@ -10,7 +10,7 @@ interface RevenueQuery extends DateRangeQuery { groupBy?: 'day' | 'week' | 'mont
 @Injectable()
 export class AnalyticsService {
   private readonly logger    = new Logger(AnalyticsService.name)
-  private readonly CACHE_TTL = 900
+  private readonly CACHE_TTL = 30
 
   constructor(
     private readonly prisma: PrismaService,

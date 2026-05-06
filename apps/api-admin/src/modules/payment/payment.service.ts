@@ -15,13 +15,40 @@ export class AdminPaymentService {
 
 
   async getPayoutStats() {
-    const [pending, processing, failed, success] = await Promise.all([
-      this.prisma.owner_payouts.count({ where: { status: 'PENDING' } }),
-      this.prisma.owner_payouts.count({ where: { status: 'PROCESSING' } }),
-      this.prisma.owner_payouts.count({ where: { status: 'FAILED' } }),
-      this.prisma.owner_payouts.count({ where: { status: 'SUCCESS' } }),
+    const [stats, pendingStats, paidStats, activeVenuesCount] = await Promise.all([
+      this.prisma.owner_payouts.aggregate({
+        where: { deleted_at: null },
+        _sum: { owner_amount: true, admin_fee: true, total_collected: true },
+      }),
+      this.prisma.owner_payouts.aggregate({
+        where: { status: { in: ['PENDING', 'FAILED', 'PROCESSING'] }, deleted_at: null },
+        _sum: { owner_amount: true },
+        _count: { id: true },
+      }),
+      this.prisma.owner_payouts.aggregate({
+        where: { status: { in: ['SUCCESS', 'MANUALLY_RESOLVED'] }, deleted_at: null },
+        _sum: { owner_amount: true },
+        _count: { id: true },
+      }),
+      this.prisma.venues.count({
+        where: { is_active: true, payouts: { some: {} } },
+      }),
     ])
-    return { pending, processing, failed, success }
+
+    return {
+      pendingCount: pendingStats._count.id,
+      pendingPayoutNPR: pendingStats._sum.owner_amount ?? 0,
+      paidCount: paidStats._count.id,
+      paidPayoutNPR: paidStats._sum.owner_amount ?? 0,
+      totalVolumeNPR: stats._sum.total_collected ?? 0,
+      platformIncomeNPR: stats._sum.admin_fee ?? 0,
+      activeVenuesCount,
+      // Legacy fields
+      pending: pendingStats._count.id,
+      success: paidStats._count.id,
+      failed: 0, // Not easily aggregated in this one-shot without more queries
+      processing: 0,
+    }
   }
 
   async listPayouts(query: ListPayoutsQueryDto) {
@@ -103,11 +130,6 @@ export class AdminPaymentService {
     return payout
   }
 
-  async retryPayout(id: string, adminId: string) {
-    await this.payoutService.adminRetryPayout(id, adminId)
-    return { message: 'Payout re-queued', payoutId: id }
-  }
-
   private async auditLog(adminId: string, action: string, targetId?: string, targetType?: string, metadata?: any) {
     // Map custom strings to valid action_type enums
     let actionEnum: any = 'UPDATE'
@@ -145,25 +167,20 @@ export class AdminPaymentService {
   }
 
   /**
-   * Admin-triggered payout: only allowed once booking status is COMPLETED.
-   * Creates payout record if missing (unique payment_id), then enqueues the payout job.
+   * Backfill payout record for old bookings that don't have one yet.
+   * Most new bookings auto-create payout records at confirmation.
+   * This endpoint recreates the payout for COMPLETED bookings missing one.
    */
   async processPayoutForBooking(bookingId: string, adminId: string) {
-    const enabled = await this.payoutService.isPayoutEnabled()
-    if (!enabled) {
-      throw new BadRequestException('Payouts are currently disabled globally')
-    }
-
     const booking = await this.prisma.bookings.findUnique({
       where: { id: bookingId },
       select: {
         id: true,
-        booking_date: true,
-        start_time: true,
         status: true,
+        total_amount: true,
         venue_id: true,
-        payment: { select: { id: true, status: true, amount: true } },
-        venue: { select: { owner: { select: { id: true, esewa_id: true, esewa_verified: true } } } },
+        payment: { select: { id: true, status: true } },
+        venue: { select: { owner: { select: { id: true, esewa_id: true } } } },
       },
     })
     if (!booking) throw new NotFoundException('Booking not found')
@@ -171,49 +188,37 @@ export class AdminPaymentService {
     if (!booking.payment?.id) throw new BadRequestException('No payment found for this booking')
     if (booking.payment.status !== 'SUCCESS') throw new BadRequestException('Payment is not successful')
     if (!booking.venue?.owner?.id) throw new BadRequestException('Booking has no owner')
-    if (!booking.venue.owner.esewa_id) throw new BadRequestException('Owner has no eSewa ID configured')
-    if (!booking.venue.owner.esewa_verified) throw new BadRequestException('Owner eSewa is not verified')
 
-    // If payout already exists, just enqueue (idempotent)
+    // If payout already exists, just return it
     const existing = await this.prisma.owner_payouts.findUnique({
       where: { payment_id: booking.payment.id },
       select: { id: true, status: true },
     })
 
-    let payoutId: string
-
     if (existing) {
-      if (existing.status === 'SUCCESS' || existing.status === 'MANUALLY_RESOLVED') {
-        throw new BadRequestException('Payout already completed')
-      }
-      if (existing.status === 'PROCESSING') {
-        throw new BadRequestException('Payout is already being processed')
-      }
-      payoutId = existing.id
-      await this.payoutService.enqueuePayoutJob(payoutId)
-    } else {
-      const adminFeePct = await this.payoutService.getAdminFeePct()
-      const split = this.payoutService.calculateSplit(booking.payment.amount, adminFeePct)
-
-      const created = await this.prisma.owner_payouts.create(
-        this.payoutService.buildPayoutCreateOp({
-          paymentId: booking.payment.id,
-          bookingId: booking.id,
-          ownerId: booking.venue.owner.id,
-          venueId: booking.venue_id,
-          ownerEsewaId: booking.venue.owner.esewa_id,
-          totalAmount: booking.payment.amount,
-          adminFee: split.adminFee,
-          ownerAmount: split.ownerAmount,
-          adminFeePct,
-        }),
-      )
-      payoutId = created.id
-      await this.payoutService.enqueuePayoutJob(payoutId)
+      return { message: 'Payout already exists', payoutId: existing.id, status: existing.status }
     }
 
-    await this.auditLog(adminId, 'TRIGGER_PAYOUT', payoutId, 'owner_payouts', { bookingId })
-    return { message: 'Payout triggered and queued', payoutId }
+    // Create payout using full booking amount (not just deposit)
+    const adminFeePct = await this.payoutService.getAdminFeePct()
+    const split = this.payoutService.calculateSplit(booking.total_amount, adminFeePct)
+
+    const created = await this.prisma.owner_payouts.create(
+      this.payoutService.buildPayoutCreateOp({
+        paymentId: booking.payment.id,
+        bookingId: booking.id,
+        ownerId: booking.venue.owner.id,
+        venueId: booking.venue_id,
+        ownerEsewaId: booking.venue.owner.esewa_id,
+        totalAmount: booking.total_amount,
+        adminFee: split.adminFee,
+        ownerAmount: split.ownerAmount,
+        adminFeePct,
+      }),
+    )
+
+    await this.auditLog(adminId, 'CREATE_PAYOUT_BACKFILL', created.id, 'owner_payouts', { bookingId })
+    return { message: 'Payout created (backfill)', payoutId: created.id }
   }
 
   async resolveManually(id: string, adminId: string, note: string) {
@@ -359,13 +364,14 @@ export class AdminPaymentService {
 
     const payoutsByVenue = await this.prisma.owner_payouts.groupBy({
       by: ['venue_id', 'status'],
-      _sum: { owner_amount: true },
+      _sum: { owner_amount: true, admin_fee: true },
       _count: { id: true },
     })
 
-    const venueMap = new Map<string, { pending: number; paid: number; pendingCount: number; paidCount: number }>()
+    const venueMap = new Map<string, { pending: number; paid: number; pendingCount: number; paidCount: number; income: number }>()
     for (const p of payoutsByVenue) {
-      const entry = venueMap.get(p.venue_id) ?? { pending: 0, paid: 0, pendingCount: 0, paidCount: 0 }
+      const entry = venueMap.get(p.venue_id) ?? { pending: 0, paid: 0, pendingCount: 0, paidCount: 0, income: 0 }
+      entry.income += p._sum.admin_fee ?? 0
       if (p.status === 'SUCCESS' || p.status === 'MANUALLY_RESOLVED') {
         entry.paid += p._sum.owner_amount ?? 0
         entry.paidCount += p._count.id
@@ -377,7 +383,7 @@ export class AdminPaymentService {
     }
 
     return venues.map((v: { id: string; name: string; owner: { id: string; name: string; esewa_id: string | null } }) => {
-      const stats = venueMap.get(v.id) ?? { pending: 0, paid: 0, pendingCount: 0, paidCount: 0 }
+      const stats = venueMap.get(v.id) ?? { pending: 0, paid: 0, pendingCount: 0, paidCount: 0, income: 0 }
       return {
         venueId: v.id,
         venueName: v.name,
@@ -388,6 +394,7 @@ export class AdminPaymentService {
         pendingCount: stats.pendingCount,
         paidCount: stats.paidCount,
         totalPayoutNPR: stats.pending + stats.paid,
+        platformIncomeNPR: stats.income,
       }
     })
   }

@@ -15,8 +15,6 @@ import { RefundProcessor } from './processors/refund.processor.js'
 import { StatsProcessor } from './processors/stats.processor.js'
 import { EmailProcessor } from './processors/email.processor.js'
 import { SmsProcessor } from './processors/sms.processor.js'
-import { OwnerPayoutProcessor } from './processors/owner-payout.processor.js'
-import { PayoutReconcilerProcessor } from './processors/payout-reconciler.processor.js'
 import { MediaOrphanCleanupProcessor } from './processors/media-orphan-cleanup.processor.js'
 import { AuditLogProcessor } from './processors/audit-log.processor.js'
 import { SecurityIncidentProcessor } from './processors/security-incident.processor.js'
@@ -44,12 +42,9 @@ import { EsewaPayoutModule } from '@futsmandu/esewa-payout'
     StatsProcessor,
     EmailProcessor,
     SmsProcessor,
-    OwnerPayoutProcessor,
-    PayoutReconcilerProcessor,
     MediaOrphanCleanupProcessor,
     AuditLogProcessor,
     SecurityIncidentProcessor,
-    // Registers slot-expiry (2 min) and payment-recon (15 min) repeatable jobs on startup.
     SchedulerService,
   ],
 })
