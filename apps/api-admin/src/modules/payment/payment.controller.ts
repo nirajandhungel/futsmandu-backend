@@ -4,7 +4,7 @@ import { AdminPaymentService } from './payment.service.js'
 import { AdminJwtGuard } from '../../common/guards/jwt.guard.js'
 import { Roles, RolesGuard } from '../../common/guards/roles.guard.js'
 import { CurrentAdmin } from '../../common/decorators/user.decorator.js'
-import { ListPaymentsQueryDto, ListPayoutsQueryDto, ProcessPayoutForBookingDto, ResolvePayoutDto, RetryPayoutDto, UpdatePlatformConfigDto } from './dto/admin-payment.dto.js'
+import { ListPaymentsQueryDto, ListPayoutsQueryDto, ProcessPayoutForBookingDto, ResolvePayoutDto, UpdatePlatformConfigDto } from './dto/admin-payment.dto.js'
 
 @ApiTags('Admin - Payments')
 @ApiBearerAuth('Admin-JWT')
@@ -36,13 +36,6 @@ export class AdminPaymentController {
   @ApiOperation({ summary: 'Get single payout details' })
   detail(@Param('id') id: string) {
     return this.adminPayment.getPayoutDetail(id)
-  }
-
-  @Post('payouts/:id/retry')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Manual retry payout' })
-  retry(@Param('id') id: string, @CurrentAdmin() admin: { id: string }, @Body() _dto: RetryPayoutDto) {
-    return this.adminPayment.retryPayout(id, admin.id)
   }
 
   @Post('payouts/:id/resolve')
